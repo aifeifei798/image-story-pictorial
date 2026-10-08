@@ -48,9 +48,15 @@ No git repo, no CI, no tests. README.md is accurate — trust it, keep it in syn
   inserts by `created_at` bisect (approve order ≠ upload order). Memory indices
   hot-update via `register_record` + `EMB.try_append` (only when a complete
   matrix exists, else `embedded: false` — backfill with `build_embeddings.py`).
-- `MAX_CHARS = 24000` (≈6k tokens, fits an 8192-token llama-server context,
-  `-c 8192`). Changing it invalidates the old matrix — re-run
-  `build_embeddings.py` after any `record_text`/MAX_CHARS change.
+- `MAX_CHARS = 3000` (≈750 tokens — fits the 1024-token slot of llama-server
+  `-c 8192 --parallel 8`). Changing it invalidates the old matrix — re-run
+  `build_embeddings.py` after any `record_text`/MAX_CHARS change. Slot math:
+  llama-server gives each parallel slot `n_ctx / --parallel` tokens, so a
+  record over ~3000 chars 400s under `--parallel 8` (raise `-c` or drop
+  `--parallel` to embed longer stories). Corpus: 10485 records, chars p50 1323
+  / p99 2455 / max 5687 (1074 tok) → 51 records lose their tail.
+  `build_embeddings.py` writes `.part` files and renames on success, so a
+  killed rebuild can't leave a short matrix on disk.
 
 ## Frontend notes (`app/static/app.js`, no framework)
 

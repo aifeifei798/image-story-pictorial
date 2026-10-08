@@ -218,6 +218,13 @@ longer matches, `/api/semantic` and `/api/similar` answer `503`. The
 `http://localhost:8023`). The `embedding` section of `/api/health` reports
 `indexed/total/ready/live`.
 
+The slot budget is `n_ctx / --parallel` tokens: with the shipped `-c 8192
+--parallel 8` that is 1024 tokens, which is why `MAX_CHARS = 3000` (≈750
+tokens). 51 of 10485 stories are longer (max 5687 characters / 1074 tokens)
+and get their tail clipped; raise `-c` or lower `--parallel` to embed them
+whole. `build_embeddings.py` writes `.part` files and renames on success, so a
+killed rebuild leaves the previous matrix intact.
+
 `summarize()` reads each `.webp` header (pure Python, no Pillow) and returns
 `image_w` / `image_h`, so the UI can set `width`/`height` on every `<img>` —
 masonry lays out with zero reflow.

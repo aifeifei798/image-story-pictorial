@@ -537,8 +537,9 @@ def approve_story(
     if raw is None:
         raise HTTPException(status_code=404, detail=f"unknown pending id: {story_id}")
     raw = dict(raw, status="published")
+    text = EMB.record_text(raw)
     try:
-        vec = EMB.embed_inputs([EMB.record_text(raw)])[0]
+        vec = EMB.embed_inputs([text])[0]
     except Exception as exc:
         raise HTTPException(
             status_code=502,
@@ -549,7 +550,12 @@ def approve_story(
     rec = register_record(raw)
     embedded = EMB.try_append(vec, story_id, len(STORIES) - 1)
     PENDING.pop(story_id, None)
-    return {"id": story_id, "status": "published", "embedded": embedded}
+    return {
+        "id": story_id,
+        "status": "published",
+        "embedded": embedded,
+        "embedded_truncated": len(text) >= EMB.MAX_CHARS,
+    }
 
 
 @app.post("/api/reject/{story_id}", status_code=200)

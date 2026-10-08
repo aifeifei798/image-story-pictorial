@@ -35,7 +35,10 @@ def main() -> None:
     texts = [E.record_text(r) for r in STORIES]
     n = len(texts)
     print(f"{n} records -> {E.EMBED_FILE} (batch={BATCH}, url={E.EMBED_URL})")
-    with open(E.EMBED_FILE, "wb") as fh:
+    # Write to .part files, rename only on success — a killed run leaves the
+    # previous complete matrix on disk instead of a short-row corpse.
+    tmp_vecs, tmp_ids = f"{E.EMBED_FILE}.part", f"{E.EMBED_IDS}.part"
+    with open(tmp_vecs, "wb") as fh:
         done = 0
         for i in range(0, n, BATCH):
             chunk = texts[i : i + BATCH]
@@ -46,10 +49,12 @@ def main() -> None:
                 fh.write(struct.pack(f"<{E.DIM}f", *v))
             done += len(chunk)
             print(f"  {done}/{n}", flush=True)
-    with open(E.EMBED_IDS, "w", encoding="utf-8") as fh:
+    with open(tmp_ids, "w", encoding="utf-8") as fh:
         import json
 
         json.dump([r["id"] for r in STORIES], fh)
+    os.replace(tmp_vecs, E.EMBED_FILE)
+    os.replace(tmp_ids, E.EMBED_IDS)
     size = os.path.getsize(E.EMBED_FILE)
     print(f"done: {E.EMBED_FILE} ({size / 1e6:.1f} MB), {E.EMBED_IDS}")
 

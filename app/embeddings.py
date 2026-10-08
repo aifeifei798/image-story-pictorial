@@ -29,7 +29,7 @@ EMBED_FILE = os.path.join(BASE_DIR, os.environ.get("EMBED_FILE", "embeddings.f32
 EMBED_IDS = os.path.join(BASE_DIR, os.environ.get("EMBED_IDS", "embeddings.ids.json"))
 
 DIM = 384
-MAX_CHARS = 24000  # ≈6k tokens — fits an 8192-token llama-server context (-c 8192)
+MAX_CHARS = 3000  # ≈750 tokens — fits the 1024-token slot of llama-server -c 8192 --parallel 8
 
 
 def record_text(r: dict) -> str:

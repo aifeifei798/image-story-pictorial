@@ -53,10 +53,10 @@ Without `downloaded_images/`, image requests `307`-redirect to the remote
 
 - **swap 先**：`sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile` 并 `/etc/fstab`里。启动峰值 ~520 MB，无 swap 即 OOM-kill 里。
 - **uvicorn 单 worker，永远**：索引全在内存，上传重写单 JSON 文件——多 worker 即数据集 fork + 写 race。
-- **systemd 而非 serve.sh**：`deploy/systemd.service`（RSS 700M 里封顶、崩自动重启、journald 而非 growing serve.log）。serve.sh 保持 for 本地 dev。
+- **systemd 而非 serve.sh**：`deploy/systemd.service`（RSS 封顶 700M、崩溃自动重启、journald 而非 growing serve.log）。serve.sh 保持 for 本地 dev。
 - **Caddy 前面**：`deploy/Caddyfile` — TLS + HSTS 终结 at 代理，uvicorn 保持 plain HTTP on 127.0.0.1:8000。Caddy 也 set `X-Forwarded-For` for 的 app 的 rate limiter（15 req / 20 s per IP on search/semantic/similar/upload）。
 - **backup cron**：`deploy/backup.sh` 快照 JSON + vectors（keep 5）——one corrupt write 即 all 10k records 全灭。
-- **embedding 服务**：Granite-97M llama-server 需要 ~300-500 MB——1G 小鸡里 only fits with swap + small context (`-c 512 -t 1`)，semantic 查询 will be slow。Alternative: 小鸡 keep browse-only（semantic 503 by design）+ tunnel `EMBED_URL` from 大 box（`ssh -R 8023:localhost:8023 bigbox`）。
+- **embedding 服务**：Granite-97M llama-server 需要 ~300-500 MB——在 1G 小鸡里它 only fits with swap + small context (`-c 512 -t 1`)，semantic 查询 will be slow。Alternative: 小鸡 keep browse-only（semantic 503 by design）+ tunnel `EMBED_URL` from 大 box（`ssh -R 8023:localhost:8023 bigbox`）。
 - memory budget: app ~300 MB + Caddy ~50 MB + embedding ~400 MB ≈ 750 MB——tight but survivable with swap；vectors 是 stored as `array('f')` rows (~16 MB) instead of Python float lists (~130 MB) to keep the app under ~300 MB.
 
 ## Web UI
@@ -201,6 +201,14 @@ package.json        @tailwindcss/cli ^4.1.0
 `/api/similar` 返回 `503`。`EMBED_URL` 环境变量改服务地址
 （默认 `http://localhost:8023`）。`/api/health` 的 `embedding` 段给出
 `indexed/total/ready/live` 状态。
+
+服务里 `-c 8192 --parallel 8` 里 right：llama-server 把 `-c` 的 context 里 split
+among parallel slots，每个 slot 只 get `n_ctx / --parallel` tokens。`--parallel 8`
+里每个 story 超过 ~3000 characters 即 400 rejected。`MAX_CHARS = 3000`（≈750
+tokens）里 1024-token slot 里 fits。10485里 51 stories 超过 3000 characters
+（max 5687 characters / 1074 tokens）and get their tail clipped。Embed them
+whole: raise `-c` or lower `--parallel`。`build_embeddings.py` 里 `.part` 里
+write + rename on success，so a killed rebuild leaves the previous matrix intact。
 
 `summarize()` reads each `.webp` header (pure Python, no Pillow) and returns
 `image_w` / `image_h`, so the UI can set `width`/`height` on every `<img>` —
