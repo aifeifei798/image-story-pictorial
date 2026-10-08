@@ -8,6 +8,7 @@ Images themselves are never preloaded; they are streamed by FileResponse.
 from __future__ import annotations
 
 import json
+import os
 import random
 import re
 from pathlib import Path
@@ -228,3 +229,86 @@ def search(query: str) -> list[tuple[int, dict]]:
 def random_stories(n: int) -> list[dict]:
     n = max(1, min(n, 20))
     return random.sample(SORTED_NEW, min(n, len(SORTED_NEW)))
+
+
+# ---------------------------------------------------------------------------
+# Upload support: persist + index a brand-new record without a restart
+# ---------------------------------------------------------------------------
+
+
+def make_record(raw: dict) -> dict:
+    """Attach derived fields (_local_image/_size/_created_sort/_editor).
+
+    An explicit ``editor`` key wins; otherwise the byline is parsed out of
+    ``story_text`` with the same regex used at import time.
+    """
+    r = dict(raw)
+    r["_local_image"] = _local_image(r)
+    r["_size"] = _webp_size(r["_local_image"]) if r["_local_image"] else None
+    r["_created_sort"] = r.get("created_at") or ""
+    ed = r.get("editor")
+    ed = ed.strip() if isinstance(ed, str) else ""
+    if not ed:
+        m = re.search(
+            r"(?m)^\s*editor\s*:\s*(.+?)\s*$",
+            r.get("story_text") or "",
+            re.IGNORECASE,
+        )
+        ed = m.group(1).strip() if m else ""
+    r["_editor"] = ed or None
+    return r
+
+
+def persist_raw(raw: dict) -> None:
+    """Atomically append a raw record to my_rag_stories.json.
+
+    The file is ``indent=2, ensure_ascii=False`` — dumping with the same
+    parameters keeps every existing byte untouched.
+    """
+    tmp = DATA_FILE.with_suffix(".json.tmp")
+    with open(DATA_FILE, encoding="utf-8") as fh:
+        data = json.load(fh)
+    data.append({k: v for k, v in raw.items() if not k.startswith("_")})
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=2)
+    os.replace(tmp, DATA_FILE)
+
+
+def register_record(raw: dict) -> dict:
+    """Index an already-persisted raw record in every in-memory structure.
+
+    The record must be the newest one (``created_at`` >= ``DATE_MAX``), so it
+    goes to the head of each newest-first index. Returns the derived record.
+    """
+    global DATE_MAX
+    r = make_record(raw)
+    sid = r["id"]
+    BY_ID[sid] = r
+    STORIES.append(r)
+    SORTED_NEW.insert(0, r)
+    SORTED_OLD.append(r)
+    ORDER_NEW.insert(0, sid)
+    for i, s in enumerate(ORDER_NEW):
+        POS[s] = i
+    for t in r.get("tags") or []:
+        key = t.strip().lower()
+        if not key:
+            continue
+        TAG_INDEX.setdefault(key, []).insert(0, sid)
+        TAG_DISPLAY.setdefault(key, t)
+    day = (r.get("created_at") or "")[:10]
+    if len(day) == 10 and day[4] == "-" and day[7] == "-":
+        DATE_INDEX.setdefault(day, []).insert(0, sid)
+    if r.get("_editor"):
+        key = r["_editor"].strip().lower()
+        if key:
+            EDITOR_INDEX.setdefault(key, []).insert(0, sid)
+            EDITOR_DISPLAY.setdefault(key, r["_editor"])
+    SEARCH[sid] = (
+        (r.get("title") or "").lower(),
+        " ".join(r.get("tags") or []).lower(),
+        (r.get("story_text") or "").lower(),
+    )
+    if r["_created_sort"] >= DATE_MAX:
+        DATE_MAX = r["_created_sort"]
+    return r

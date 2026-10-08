@@ -9,7 +9,8 @@ No git repo, no CI, no tests. README.md is accurate — trust it, keep it in syn
 - Backend changes (anything under `app/*.py`) need a restart. Static files
   (`app/static/*`) are served per-request — no restart needed.
 - Deps: `uv pip install -r requirements.txt --python .venv`. The venv has no
-  pip and no numpy — backend must stay **stdlib-only** (`urllib`, `struct`).
+  pip and no numpy — backend is stdlib-only (`urllib`, `struct`) except
+  `python-multipart`, which FastAPI needs to parse `/api/upload` form data.
 
 ## Static-asset cache traps (will bite you)
 
@@ -34,6 +35,14 @@ No git repo, no CI, no tests. README.md is accurate — trust it, keep it in syn
   `EMBED_URL` override). If the service is down or row count != dataset size,
   `/api/semantic` and `/api/similar` return 502/503 by design.
 - After `my_rag_stories.json` changes, re-run `.venv/bin/python build_embeddings.py`.
+- Upload: `POST /api/upload` (multipart webp + title/story_text required,
+  tags/editor optional; `X-Upload-Token` == `$UPLOAD_TOKEN`, gate crashes
+  startup if unset). `serve.sh start` generates/persists the token in
+  `.run/upload_token` (gitignored) so restarts keep working. Embed-before-write:
+  a dead embedding service 502s with nothing persisted. Memory indices
+  hot-update via `dataset.register_record` (newest-first head inserts + `POS`
+  rebuild) and `EMB.try_append` (only when a complete matrix exists, else
+  `embedded: false` — backfill with `build_embeddings.py`).
 
 ## Frontend notes (`app/static/app.js`, no framework)
 

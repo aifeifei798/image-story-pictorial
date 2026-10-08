@@ -133,5 +133,32 @@ def rank(query: list[float], top_k: int) -> list[tuple[float, int]]:
     return heapq.nlargest(top_k, scored, key=lambda p: p[0])
 
 
+def try_append(vec: list[float], sid: str, total_before: int) -> bool:
+    """Persist one vector iff a complete matrix for ``total_before`` rows exists.
+
+    Appends the row to ``embeddings.f32`` + ``embeddings.ids.json`` and to the
+    in-memory cache. Returns True when the new row is indexed; False (record
+    stays searchable by everything except semantic/similar) when there is no
+    usable matrix — run ``build_embeddings.py`` later to backfill.
+    """
+    global _LOADED_FOR
+    if len(vec) != DIM:
+        return False
+    if not ensure_loaded(total_before) or len(_IDS) != total_before:
+        return False
+    if _IDS and _IDS[-1] == sid:  # retry safety: already appended
+        return True
+    with open(EMBED_FILE, "ab") as fh:
+        fh.write(struct.pack(f"<{DIM}f", *vec))
+    tmp = EMBED_IDS + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(_IDS + [sid], fh)
+    os.replace(tmp, EMBED_IDS)
+    _VECTORS.append([float(x) for x in vec])  # type: ignore[union-attr]
+    _IDS.append(sid)
+    _LOADED_FOR = total_before + 1  # memory now matches disk; skip a reload
+    return True
+
+
 def row_ids() -> list[str]:
     return _IDS

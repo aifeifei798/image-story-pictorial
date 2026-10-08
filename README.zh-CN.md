@@ -120,6 +120,7 @@ or `tailwind.css`, bump the `?v=N` query on the `<link>`/`<script>` refs.
 | `GET /api/semantic?q=&page=` | cosine search over Granite-Embedding-97M vectors |
 | `GET /api/similar/{id}?n=8` | nearest neighbours of one record (n ≤ 20, no server call) |
 | `GET /api/random?n=1` | n ≤ 20 |
+| `POST /api/upload` | 上传一条故事：multipart `image`（.webp）+ `title` + `story_text`（必填），`tags`（逗号分隔）+ `editor`（选填）。请求头 `X-Upload-Token` 必须等于 `$UPLOAD_TOKEN`。向量实时计算（embedding 服务挂了就 502，什么都不写）；索引热更新，无需重启 |
 
 Paging: `page` ≥ 1, `page_size` 1–50, responses carry
 `{total, page, page_size, pages, items}`.
@@ -132,6 +133,19 @@ curl "localhost:8000/api/search?q=school+uniform"
 curl "localhost:8000/api/semantic?q=school+uniform"
 curl "localhost:8000/api/similar/6988b858eb929600014610ee?n=5"
 curl "localhost:8000/api/tags/urban%20romance"
+```
+
+Upload（纯 API，无页面；token 由 `./serve.sh start` 生成并存于
+`.run/upload_token`）：
+
+```bash
+TOKEN=$(cat .run/upload_token)
+curl -X POST localhost:8000/api/upload -H "X-Upload-Token: $TOKEN" \
+  -F "image=@photo.webp;type=image/webp" \
+  -F "title=Midnight Diner" \
+  -F "story_text=..." \
+  -F "tags=noir, night" -F "editor=Monica"
+# -> {"id": ..., "image": "/api/images/...", "embedded": true}
 ```
 
 Interactive docs at `/docs`.

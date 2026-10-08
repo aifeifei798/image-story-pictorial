@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import pathlib
+import secrets
+from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException, Path, Query
+from fastapi import FastAPI, File, Form, Header, HTTPException, Path, Query, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 
 from . import embeddings as EMB
@@ -15,6 +18,7 @@ from .dataset import (
     DATE_MIN,
     EDITOR_DISPLAY,
     EDITOR_INDEX,
+    IMAGE_DIR,
     MISSING_LOCAL,
     ORDER_NEW,
     POS,
@@ -24,10 +28,20 @@ from .dataset import (
     TAG_DISPLAY,
     TAG_INDEX,
     paginate,
+    persist_raw,
     random_stories,
+    register_record,
     search,
     summarize,
 )
+
+UPLOAD_TOKEN = os.environ.get("UPLOAD_TOKEN")
+if not UPLOAD_TOKEN:
+    raise RuntimeError(
+        "UPLOAD_TOKEN is not set — refusing to start with an open /api/upload"
+    )
+
+MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
 # ---------------------------------------------------------------------------
 # Static assets (the Tailwind UI)
@@ -362,3 +376,79 @@ def similar_stories(
 @app.get("/api/random")
 def get_random(n: int = Query(1, ge=1, le=20)) -> dict:
     return {"items": [summarize(r) for r in random_stories(n)]}
+
+
+# ---------------------------------------------------------------------------
+# Upload (API only, no UI). Auth: X-Upload-Token header == $UPLOAD_TOKEN.
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/upload", status_code=201)
+async def upload_story(
+    image: UploadFile = File(...),
+    title: str = Form(...),
+    story_text: str = Form(...),
+    tags: str = Form(""),
+    editor: str = Form(""),
+    x_upload_token: str | None = Header(default=None),
+) -> dict:
+    """Ingest one story: webp + metadata in, embedding computed inline.
+
+    The vector is embedded BEFORE anything is written — a dead embedding
+    service aborts with 502 and leaves no half-written record.
+    """
+    if not x_upload_token or not secrets.compare_digest(x_upload_token, UPLOAD_TOKEN):  # type: ignore[arg-type]
+        raise HTTPException(status_code=401, detail="bad or missing X-Upload-Token")
+    title = title.strip()
+    story_text = story_text.strip()
+    if not title or len(title) > 500:
+        raise HTTPException(status_code=400, detail="title required, max 500 chars")
+    if not story_text or len(story_text) > 100000:
+        raise HTTPException(status_code=400, detail="story_text required, max 100000 chars")
+    tag_list = [t.strip() for t in tags.replace("，", ",").split(",")]
+    tag_list = [t for t in tag_list if t][:30]
+    blob = await image.read()
+    if not blob or len(blob) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=400, detail="image required, max 20 MB")
+    if len(blob) < 30 or blob[0:4] != b"RIFF" or blob[8:12] != b"WEBP":
+        raise HTTPException(status_code=400, detail="image must be a .webp file")
+
+    sid = secrets.token_hex(12)
+    while sid in BY_ID:
+        sid = secrets.token_hex(12)
+    raw: dict = {
+        "id": sid,
+        "title": title,
+        "status": "published",
+        "image_url": None,
+        "local_image_path": f"./downloaded_images/{sid}.webp",
+        "story_text": story_text,
+        "tags": tag_list,
+        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+    }
+    if editor.strip():
+        raw["editor"] = editor.strip()
+
+    try:
+        vec = EMB.embed_inputs([EMB.record_text(raw)])[0]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"embedding 服务不可达 ({EMB.EMBED_URL}): {exc}"
+        )
+    try:
+        IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+        (IMAGE_DIR / f"{sid}.webp").write_bytes(blob)
+        persist_raw(raw)
+        embedded = EMB.try_append(vec, sid, len(STORIES))
+        rec = register_record(raw)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"upload failed: {exc}")
+    return {
+        "id": sid,
+        "image": f"/api/images/{sid}",
+        "editor": rec.get("_editor"),
+        "tags": tag_list,
+        "embedded": embedded,
+    }

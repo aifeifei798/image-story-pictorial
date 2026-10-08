@@ -119,6 +119,7 @@ or `tailwind.css`, bump the `?v=N` query on the `<link>`/`<script>` refs.
 | `GET /api/semantic?q=&page=` | cosine search over Granite-Embedding-97M vectors |
 | `GET /api/similar/{id}?n=8` | nearest neighbours of one record (n ≤ 20, no server call) |
 | `GET /api/random?n=1` | n ≤ 20 |
+| `POST /api/upload` | ingest one story: multipart `image` (.webp) + `title` + `story_text` (required), `tags` (comma-separated) + `editor` (optional). Header `X-Upload-Token` must equal `$UPLOAD_TOKEN`. The vector is embedded inline (502 if the embedding service is down, nothing written); indices hot-update, no restart needed |
 
 Paging: `page` ≥ 1, `page_size` 1–50, responses carry
 `{total, page, page_size, pages, items}`.
@@ -131,6 +132,19 @@ curl "localhost:8000/api/search?q=school+uniform"
 curl "localhost:8000/api/semantic?q=school+uniform"
 curl "localhost:8000/api/similar/6988b858eb929600014610ee?n=5"
 curl "localhost:8000/api/tags/urban%20romance"
+```
+
+Upload (API only, no UI; token printed by `./serve.sh start`, persisted in
+`.run/upload_token`):
+
+```bash
+TOKEN=$(cat .run/upload_token)
+curl -X POST localhost:8000/api/upload -H "X-Upload-Token: $TOKEN" \
+  -F "image=@photo.webp;type=image/webp" \
+  -F "title=Midnight Diner" \
+  -F "story_text=..." \
+  -F "tags=noir, night" -F "editor=Monica"
+# -> {"id": ..., "image": "/api/images/...", "embedded": true}
 ```
 
 Interactive docs at `/docs`.
