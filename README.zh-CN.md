@@ -1,12 +1,12 @@
-# image-story-pictorial — FastAPI image-story service
+# my_rag_stories — FastAPI image-story service
 
 Serves the 10,485 records in `my_rag_stories.json` plus the 10,482 local
 `.webp` files in `downloaded_images/`, and renders them in a bilingual
-(EN default, 中文 toggle) Tailwind CSS magazine-style gallery UI. Keyword +
+(默认英文，导航可切中文) Tailwind CSS magazine-style gallery UI. Keyword +
 tag search plus embedding semantic search (RAG-ready: precomputed vectors,
 no reranker yet).
 
-中文版: [README.zh-CN.md](README.zh-CN.md)
+英文版: [README.md](README.md)
 
 ## Run
 
@@ -71,19 +71,20 @@ UI modes, all driven by query params on `/`:
 | `/?mode=tags` | tag wall, chips scaled by count |
 | `/?mode=editors` | editor wall, chips scaled by count |
 | `/?editor=Monica` | one editor's works |
+| `/?lang=zh` | Chinese UI (default English, toggle in nav, persists) |
 | `/?tag=urban%20romance` | one tag |
 | `/?date=2026-02-07` | one day's stories |
 | `/?q=school+uniform` | keyword search, hits highlighted with `<mark>` |
-| `/?q=校服` | CJK queries go straight to semantic search (corpus is English, keyword would miss); English keyword with 0 hits also falls back to semantic |
-| `/?similar=<id>` | nearest neighbours of one record (story page ✦ Similar) |
-| `/?lang=zh` | Chinese UI (default English, toggle in nav, persists) |
+| `/?q=校服` | 含 CJK 的查询直接走语义搜索（语料是英文，关键词必空）；英文关键词 0 命中时也自动降级到语义 |
+| `/?similar=<id>` | nearest neighbours of one record (story page ✦ 语义相似) |
 
 The nav also has a slideshow button: fullscreen overlay, one random story
 (image + full text) every 3 s, click anywhere or ESC to stop.
 
 Cards link to `/story?id=…`; the detail page has prev/next navigation,
-"✦ Similar" (embedding neighbours via `/api/similar`) and "🎲 Surprise me".
+"✦ 语义相似" (embedding neighbours via `/api/similar`) and "🎲 随机一张".
 Clicking a card's tag, date or the editor byline filters to that facet.
+Paging is driven by the 前/后 buttons under the grid.
 
 Tailwind v4.3.3 is compiled locally (`@tailwindcss/cli`), so `app/static/tailwind.css`
 is generated output — regenerate, never hand-edit:
@@ -139,42 +140,39 @@ Interactive docs at `/docs`.
 
 ```
 app/__init__.py   package marker
-app/dataset.py    one-shot load + indices (BY_ID, TAG_INDEX, DATE_INDEX, EDITOR_INDEX, ORDER_NEW/POS, SEARCH, _webp_size)
+app/dataset.py    one-shot load + indices (BY_ID, TAG_INDEX, SEARCH, _webp_size)
 app/embeddings.py llama-server client + embeddings.f32 matrix + cosine rank
 app/main.py       routes
 app/static/       index.html · story.html · app.js · lang.js · tailwind.css (generated)
 build_embeddings.py  embed all records -> embeddings.f32 + embeddings.ids.json
-embeddings.f32 / .ids.json  precomputed (N, 384) float32 matrix + row ids (gitignored, rebuild locally)
+embeddings.f32 / .ids.json  precomputed (N, 384) float32 matrix + row ids
 serve.sh          start/stop/restart/status/logs/health/open
 .run/             serve.pid · serve.log (created by serve.sh)
-tailwind.config.js  build input: content globs = the UI sources
+tailwind.config.js  build input: content globs = the 3 UI sources
 build/input.css     @import tailwindcss entry
 build/check_classes.py  class-token → compiled-selector assertion
 package.json        @tailwindcss/cli ^4.1.0
 ```
 
-## Embedding semantic search
+## Embedding 语义搜索
 
-The vector model runs outside this service:
-`granite-embedding-97m-multilingual-r2/llama-server.sh`
-(`:8023`, 384 dims, L2-normalized, cosine = dot product). This site only keeps
-the precomputed matrix; each query embeds once (~50 ms) then ranks 10k dot
-products (~0.15 s). No third-party dependencies.
+向量模型跑在站外：`granite-embedding-97m-multilingual-r2/llama-server.sh`
+（`:8023`，384 维，已 L2 归一化，cosine = 点积）。本站只存预计算矩阵，
+查询时 embed 一次 query（~50 ms）再做 10k 点积排序（~0.15 s），无第三方依赖。
 
 ```bash
-# 1. start the embedding service (sibling directory)
+# 1. 先起 embedding 服务（隔壁目录）
 ../granite-embedding-97m-multilingual-r2/llama-server.sh
-# 2. build the matrix (~1 minute, 16.1 MB)
+# 2. 生成矩阵（约 1 分钟，16.1 MB）
 .venv/bin/python build_embeddings.py [--batch 32]
-# 3. restart this site
+# 3. 重启本站
 ./serve.sh restart
 ```
 
-Re-run step 2 after `my_rag_stories.json` changes; when the row count no
-longer matches, `/api/semantic` and `/api/similar` answer `503`. The
-`EMBED_URL` env var changes the service address (default
-`http://localhost:8023`). The `embedding` section of `/api/health` reports
-`indexed/total/ready/live`.
+`my_rag_stories.json` 变更后重跑第 2 步；行数对不上时 `/api/semantic` 和
+`/api/similar` 返回 `503`。`EMBED_URL` 环境变量改服务地址
+（默认 `http://localhost:8023`）。`/api/health` 的 `embedding` 段给出
+`indexed/total/ready/live` 状态。
 
 `summarize()` reads each `.webp` header (pure Python, no Pillow) and returns
 `image_w` / `image_h`, so the UI can set `width`/`height` on every `<img>` —
