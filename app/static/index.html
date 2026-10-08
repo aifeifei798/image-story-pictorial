@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0b0b10">
+<title data-i18n="doc_title">my_rag_stories · 影像故事档案</title>
+<link rel="stylesheet" href="/static/tailwind.css?v=8">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23d4af37'/%3E%3C/svg%3E">
+<script src="/static/lang.js?v=2" defer></script>
+<script src="/static/app.js?v=19" defer></script>
+<style>
+  /* Only what Tailwind cannot express: grain, keyframes, scrollbar. */
+  @keyframes shimmer { 0% { background-position: -120% 0 } 100% { background-position: 220% 0 } }
+  @keyframes drift { 0% { transform: translate3d(0,0,0) } 50% { transform: translate3d(3%,4%,0) } 100% { transform: translate3d(-2%,-3%,0) } }
+  #grain { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E"); }
+  html { scrollbar-width: thin; scrollbar-color: #2a2a35 transparent; }
+  ::selection { background: #d4af37; color: #0b0b10; }
+  .sk { background-image: linear-gradient(100deg, transparent 20%, #ffffff12 45%, transparent 70%); background-size: 220% 100%; animation: shimmer 2.4s linear infinite; }
+  .drift-a, .drift-b { animation: drift 26s ease-in-out infinite alternate; }
+</style>
+</head>
+
+<body class="m-0 min-h-screen bg-[#0b0b10] font-sans text-slate-200 antialiased">
+
+<!-- ── ambient light ─────────────────────────────────────────────── -->
+<div class="pointer-events-none fixed inset-0 -z-30 overflow-hidden bg-[#0b0b10]">
+  <div class="drift-a absolute -top-[30%] -left-[15%] h-[80vh] w-[75vw] bg-[radial-gradient(closest-side,#d4af371f,transparent)] blur-3xl"></div>
+  <div class="drift-b absolute top-[25%] -right-[20%] h-[70vh] w-[70vw] bg-[radial-gradient(closest-side,#b8860b1a,transparent)] blur-3xl"></div>
+  <div class="absolute bottom-[-20%] left-[20%] h-[60vh] w-[60vw] bg-[radial-gradient(closest-side,#f59e0b14,transparent)] blur-3xl"></div>
+  <div class="absolute inset-0 opacity-[.05] mix-blend-overlay" id="grain"></div>
+</div>
+
+<!-- ── top bar ───────────────────────────────────────────────────── -->
+<header class="sticky top-0 z-50 bg-[#0b0b10b3] backdrop-blur-xl border-b-1 border-white/8 px-6 py-3 flex flex-wrap gap-3 items-center">
+  <a href="/" class="inline-flex items-center gap-2 no-underline">
+    <span class="h-9 w-9 grid place-items-center rounded-xl bg-gradient-to-br from-amber-300 to-amber-600 text-center text-2xl text-white font-black shadow-lg">R</span>
+    <span class="font-serif italic text-lg text-slate-100 tracking-[.08em]" data-i18n="logo_sub">影像&nbsp;·&nbsp;故事档案</span>
+  </a>
+
+  <nav class="ml-auto flex flex-wrap gap-2 text-sm text-slate-400" id="nav">
+    <button data-mode="browse" class="cursor-pointer rounded-lg px-3 py-1.5 border-0 bg-transparent text-slate-400 transition duration-200 hover:text-amber-200 hover:bg-white/6 focus-visible:ring-1 focus-visible:ring-amber-300/60" data-i18n="nav_browse">浏览</button>
+    <button data-mode="random" class="cursor-pointer rounded-lg px-3 py-1.5 border-0 bg-transparent text-slate-400 transition duration-200 hover:text-amber-200 hover:bg-white/6 focus-visible:ring-1 focus-visible:ring-amber-300/60" data-i18n="nav_random">随机</button>
+    <button data-mode="tags"   class="cursor-pointer rounded-lg px-3 py-1.5 border-0 bg-transparent text-slate-400 transition duration-200 hover:text-amber-200 hover:bg-white/6 focus-visible:ring-1 focus-visible:ring-amber-300/60" data-i18n="nav_tags">标签</button>
+    <button data-mode="editors" class="cursor-pointer rounded-lg px-3 py-1.5 border-0 bg-transparent text-slate-400 transition duration-200 hover:text-amber-200 hover:bg-white/6 focus-visible:ring-1 focus-visible:ring-amber-300/60" data-i18n="nav_editors">小编</button>
+    <button id="slide-btn" class="cursor-pointer rounded-lg px-3 py-1.5 border-0 bg-transparent text-slate-400 transition duration-200 hover:text-amber-200 hover:bg-white/6 focus-visible:ring-1 focus-visible:ring-amber-300/60" data-i18n="nav_slideshow">幻灯</button>
+    <button data-lang-toggle class="cursor-pointer rounded-lg px-3 py-1.5 border-0 bg-transparent text-slate-400 transition duration-200 hover:text-amber-200 hover:bg-white/6 focus-visible:ring-1 focus-visible:ring-amber-300/60">中文</button>
+  </nav>
+
+  <form class="flex-1 max-w-md" id="search-form">
+    <label class="sr-only text-xs" for="q" data-i18n="nav_search">关键词搜索</label>
+    <input type="search" name="q" id="q" data-i18n-ph="search_ph" placeholder="关键词 / 中文直接语义搜…"
+           class="w-full rounded-lg bg-white/8 px-3 py-1.5 text-sm text-slate-100 ring-1 ring-white/12 backdrop-blur transition duration-200 focus:ring-amber-300/70 focus:bg-white/12 placeholder:text-slate-500">
+    <button type="submit" class="hidden"></button>
+  </form>
+</header>
+
+<!-- ── stage ─────────────────────────────────────────────────────── -->
+<main class="relative mx-auto max-w-7xl px-6 sm:px-8 pb-16">
+  <section id="mast" class="mt-8 text-center">
+    <p id="mast-no" class="text-xs text-slate-500 tracking-[.3em]">画 报</p>
+    <div class="mt-2 font-serif italic text-4xl text-slate-100 tracking-[.06em]" data-i18n="mast_title">影像故事画报</div>
+    <p id="mast-sub" class="mt-2 text-xs text-slate-500"></p>
+    <div class="my-6 h-px bg-white/10"></div>
+  </section>
+  <section id="hero" class="mb-8 hidden grid gap-6 md:grid-cols-2 items-center rounded-2xl ring-1 ring-white/10 bg-white/4 p-4">
+    <a id="hero-a" href="#">
+      <span class="relative block overflow-hidden rounded-xl">
+        <img id="hero-img" class="block w-full max-h-[60vh] object-cover" alt="">
+      </span>
+    </a>
+    <div>
+      <p class="text-xs text-amber-200 tracking-[.3em]" data-i18n="cover_kicker">本期封面 · COVER</p>
+      <h2 id="hero-title" class="mt-3 font-serif italic text-3xl text-slate-100 tracking-[.02em]"></h2>
+      <p id="hero-meta" class="mt-2 text-xs text-slate-500"></p>
+      <p id="hero-ex" class="mt-4 text-sm leading-relaxed text-slate-300"></p>
+      <a id="hero-link" href="#" class="mt-4 inline-block rounded-lg px-3 py-1.5 text-sm text-slate-300 ring-1 ring-white/12 transition duration-200 hover:text-amber-100 hover:ring-amber-300/60" data-i18n="read_more">阅读全文 →</a>
+    </div>
+  </section>
+  <section id="head" class="mt-2 flex flex-wrap items-baseline gap-4 justify-between"></section>
+  <div id="grid" class="mt-6 columns-1 sm:columns-2 lg:columns-3 xl:columns-4 2xl:columns-5 gap-5"></div>
+  <section id="pager" class="mt-10 flex flex-wrap items-center gap-3 justify-center"></section>
+  <section id="slide" class="fixed inset-0 z-[100] hidden items-center justify-center bg-black/92 p-6 cursor-pointer">
+    <div class="grid max-h-[90vh] w-full max-w-6xl gap-6 overflow-hidden md:grid-cols-2">
+      <img id="slide-img" class="max-h-[86vh] w-full rounded-xl object-contain" alt="">
+      <div class="min-h-0 overflow-y-auto">
+        <a id="slide-title" href="#" class="font-serif italic text-xl text-slate-100 tracking-[.02em]"></a>
+        <p id="slide-meta" class="mt-2 text-xs text-slate-500"></p>
+        <div id="slide-text" class="mt-4"></div>
+        <p id="slide-hint" class="mt-6 text-xs text-slate-500" data-i18n="slide_hint">点击任意处停止 · ESC</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- ── footer ────────────────────────────────────────────────────── -->
+<footer class="mt-12 px-6 py-6 flex flex-wrap items-center gap-6 justify-between text-xs text-slate-500">
+  <p class="max-w-2xl leading-relaxed" data-i18n-html="foot_data_html">数据源 <code class="px-2 py-0.5 rounded bg-white/6 text-slate-300">my_rag_stories.json</code> 与
+    <code class="px-2 py-0.5 rounded bg-white/6 text-slate-300">downloaded_images/</code> ·
+    原 .webp 直接 serve · 语义搜索由 Granite-Embedding-97M（llama-server :8023）驱动</p>
+  <p class="flex-1">接口 <span class="text-amber-200">/api/stories · /api/search · /api/semantic · /api/similar · /api/tags · /api/dates · /api/editors · /api/images</span></p>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0b0b10">
+<title data-i18n="doc_title">story · my_rag_stories</title>
+<link rel="stylesheet" href="/static/tailwind.css?v=8">
+<script src="/static/lang.js?v=2" defer></script>
+<script defer>
+/* Detail page: pulls one record from /api/stories/{id} and lays it out. */
+document.addEventListener("DOMContentLoaded", function () {
+  applyStatic();
+  const stage = document.getElementById("stage");
+  const id = new URLSearchParams(location.search).get("id");
+  if (!id) { stage.innerHTML = "<p class='text-amber-200 text-sm'>" + T("err_noid") + "</p>"; return; }
+  fetch("/api/stories/" + encodeURIComponent(id)).then(function (r) { return r.json() }).then(function (d) {
+    if (!d.id) { stage.innerHTML = "<p class='text-amber-200 text-sm'>" + T("err_unknown") + id + "</p>"; return; }
+    document.title = (d.title || d.id) + " · my_rag_stories";
+
+    const head = document.getElementById("head");
+    head.innerHTML =
+      '<h1 class="font-serif italic text-3xl text-white/95 leading-tight tracking-[.01em]">' + (d.title || "") + "</h1>" +
+      '<div class="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-400">' +
+        '<a class="text-slate-500 transition duration-200 hover:text-amber-200" title="' + T("see_day") + '" href="/?date=' + (d.created_at || "").slice(0, 10) + '">' + (d.created_at || "").slice(0, 10) + "</a>" +
+        (d.editor ? '<a class="rounded-full px-2 py-0.5 text-[11px] text-amber-100/80 bg-white/7 transition duration-200 hover:bg-amber-500/25 hover:text-amber-100" href="/?editor=' + encodeURIComponent(d.editor) + '">✎ ' + d.editor + "</a>" : "") +
+        '<span class="px-2 py-0.5 rounded-full bg-white/8 text-amber-100/80">' + (d.tags || []).length + " tags</span>" +
+      "</div>";
+
+    const img = document.getElementById("frame");
+    img.innerHTML =
+      '<img class="block h-auto w-full max-w-full rounded-xl ring-1 ring-white/15 shadow-2xl" src="' + d.image + '" alt="' + (d.title || "") + '"' +
+      (d.image_w ? ' width="' + d.image_w + '" height="' + d.image_h + '"' : "") + '">' +
+      '<div class="absolute inset-0 rounded-xl bg-[radial-gradient(circle_at_50%_120%,#d4af3726,transparent)] mix-blend-screen pointer-events-none"></div>';
+
+    /* click-to-zoom lightbox */
+    const zoom = document.getElementById("zoom");
+    const zoomImg = document.getElementById("zoom-img");
+    const closeZoom = function () {
+      zoom.classList.add("hidden"); zoom.classList.remove("flex");
+      document.body.style.overflow = "";
+    };
+    img.onclick = function () {
+      zoomImg.src = d.image;
+      zoomImg.alt = d.title || d.id;
+      zoom.classList.remove("hidden"); zoom.classList.add("flex");
+      document.body.style.overflow = "hidden";
+    };
+    zoom.onclick = closeZoom;
+    document.addEventListener("keydown", function (ev) {
+      if (ev.key === "Escape") closeZoom();
+    });
+
+    const body = document.getElementById("body");
+    var esc = function (s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); };
+    var text = (d.story_text || "").replace(/^\s*editor\s*:.*$/gim, ""); // byline shown in head
+    var html = "", ledeDone = false;
+    ((text.split(/\n\s*\n/))).forEach(function (b) {
+      var t = b.replace(/^\s+|\s+$/g, "");
+      if (!t) return;
+      var m = t.match(/^(\d+)\.\s*([^\n]{1,90})$/);
+      if (m) {
+        html += "<h2 class='mt-8 flex items-baseline gap-3 font-serif text-lg tracking-[.02em] text-slate-100'>" +
+          "<span class='text-sm text-amber-200'>" + m[1] + "</span>" + esc(m[2]) + "</h2>";
+      } else if (!ledeDone) {
+        html += "<p class='first-line font-serif italic text-lg leading-relaxed text-slate-100'>" + esc(t).replace(/\n/g, "<br>") + "</p>" +
+          "<div class='my-6 h-px bg-white/10'></div>";
+        ledeDone = true;
+      } else {
+        html += "<p class='mt-5 text-[15px] leading-relaxed text-slate-300'>" + esc(t).replace(/\n/g, "<br>") + "</p>";
+      }
+    });
+    body.innerHTML = html;
+
+    const chips = document.getElementById("chips");
+    (d.tags || []).forEach(function (t) {
+      const b = document.createElement("button");
+      b.className = "cursor-pointer rounded-full px-2 py-0.5 text-[11px] text-slate-400 bg-white/7 transition duration-200 hover:bg-amber-500/25 hover:text-amber-100 focus:ring-1 focus:ring-amber-300/60";
+      b.dataset.tag = t;
+      b.textContent = t;
+      b.title = T("see_tag") + t;
+      b.onclick = function () { location.href = "/?tag=" + encodeURIComponent(t); };
+      chips.appendChild(b);
+    });
+
+    const acts = document.getElementById("acts");
+    const mk = function (cls, txt, href) {
+      const a = document.createElement("a");
+      a.className = cls; a.href = href; a.textContent = txt;
+      acts.appendChild(a);
+    };
+    if (d.prev)
+      mk("rounded-lg px-3 py-1.5 text-xs text-slate-300 ring-1 ring-white/12 transition duration-200 hover:ring-amber-300/60 hover:text-amber-100", T("prev"),
+         "/story?id=" + encodeURIComponent(d.prev));
+    if (d.next)
+      mk("rounded-lg px-3 py-1.5 text-xs text-slate-300 ring-1 ring-white/12 transition duration-200 hover:ring-amber-300/60 hover:text-amber-100", T("next"),
+         "/story?id=" + encodeURIComponent(d.next));
+    mk("rounded-lg px-3 py-1.5 text-xs text-slate-300 ring-1 ring-white/12 transition duration-200 hover:ring-amber-300/60 hover:text-amber-100", T("sim"),
+       "/?similar=" + encodeURIComponent(d.id));
+    const rb = document.createElement("button");
+    rb.className = "cursor-pointer rounded-lg px-3 py-1.5 text-xs text-slate-300 ring-1 ring-white/12 transition duration-200 hover:ring-amber-300/60 hover:text-amber-100";
+    rb.textContent = T("rand");
+    rb.onclick = function () {
+      fetch("/api/random?n=1").then(function (r) { return r.json(); }).then(function (rd) {
+        const it = rd.items && rd.items[0];
+        if (it) location.href = "/story?id=" + encodeURIComponent(it.id);
+      });
+    };
+    acts.appendChild(rb);
+  }).catch(function (e) {
+    stage.innerHTML = "<p class='text-amber-200 text-sm'>" + T("err_load") + e.message + "</p>";
+  });
+});
+</script>
+<style>
+  /* Only the bits Tailwind cannot express: grain, scrollbar, drop cap. */
+  @keyframes shimmer { 0% { background-position: -120% 0 } 100% { background-position: 220% 0 } }
+  @keyframes drift { 0% { transform: translate3d(0,0,0) } 50% { transform: translate3d(3%,4%,0) } 100% { transform: translate3d(-2%,-3%,0) } }
+  #grain { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E"); }
+  html { scrollbar-width: thin; scrollbar-color: #2a2a35 transparent; }
+  ::selection { background: #d4af37; color: #0b0b10; }
+  .first-line::first-letter { float: left; font-size: 3.4em; line-height: .8; font-family: ui-serif, Georgia, serif; color: #d4af37; }
+  .drift-a, .drift-b { animation: drift 26s ease-in-out infinite alternate; }
+</style>
+</head>
+
+<body class="m-0 min-h-screen bg-[#0b0b10] font-sans text-slate-200 antialiased">
+
+<div class="pointer-events-none fixed inset-0 -z-30 overflow-hidden bg-[#0b0b10]">
+  <div class="drift-a absolute -top-[30%] -left-[15%] h-[80vh] w-[75vw] bg-[radial-gradient(closest-side,#d4af371f,transparent)] blur-3xl"></div>
+  <div class="drift-b absolute top-[25%] -right-[20%] h-[70vh] w-[70vw] bg-[radial-gradient(closest-side,#b8860b1a,transparent)] blur-3xl"></div>
+  <div class="absolute inset-0 opacity-[.05] mix-blend-overlay" id="grain"></div>
+</div>
+
+<header class="sticky top-0 z-50 bg-[#0b0b10b3] backdrop-blur-xl border-b-1 border-white/8 px-6 py-3 flex flex-wrap gap-3 items-center">
+  <a href="/" class="inline-flex items-center gap-2 no-underline">
+    <span class="h-9 w-9 grid place-items-center rounded-xl bg-gradient-to-br from-amber-300 to-amber-600 text-center text-2xl text-white font-black shadow-lg">R</span>
+    <span class="font-serif italic text-lg text-slate-100 tracking-[.08em]" data-i18n="logo_sub">影像&nbsp;·&nbsp;故事档案</span>
+  </a>
+  <nav class="ml-auto flex flex-wrap gap-2 text-sm text-slate-400">
+    <button data-lang-toggle class="cursor-pointer rounded-lg px-3 py-1.5 border-0 bg-transparent text-slate-400 transition duration-200 hover:text-amber-200 hover:bg-white/6 focus:ring-1 focus:ring-amber-300/60">中文</button>
+    <button class="cursor-pointer rounded-lg px-3 py-1.5 border-0 bg-transparent text-slate-400 transition duration-200 hover:text-amber-200 hover:bg-white/6 focus:ring-1 focus:ring-amber-300/60" onclick="history.back()" data-i18n="back">← 返回</button>
+  </nav>
+</header>
+
+<main class="relative mx-auto max-w-6xl px-6 sm:px-8 pb-14">
+  <div id="head" class="mt-4 flex flex-col gap-3"></div>
+
+  <div id="stage" class="mt-6 grid md:grid-cols-2 gap-8 items-start">
+    <div id="frame" class="relative isolate w-full rounded-xl overflow-hidden shadow-2xl cursor-zoom-in"></div>
+    <div class="flex flex-col gap-6">
+      <div id="body" class="max-w-[68ch] text-[15px] leading-relaxed text-slate-300"></div>
+      <div id="chips" class="flex flex-wrap items-center gap-2"></div>
+      <div id="acts" class="flex flex-wrap items-center gap-2"></div>
+    </div>
+  </div>
+</main>
+
+<footer class="mt-12 px-6 py-6 flex flex-wrap items-center gap-6 justify-between text-xs text-slate-500">
+  <p class="max-w-2xl leading-relaxed" data-i18n-html="foot_story_1_html">单记录视图 · <code class="px-2 py-0.5 rounded bg-white/6 text-slate-300">GET /api/stories/{id}</code> 返回 story_text 与 image</p>
+  <p class="flex-1" data-i18n="foot_story_2">原 webp 直接 serve · 语义相似由 embedding 驱动</p>
+</footer>
+
+<div id="zoom" class="fixed inset-0 z-[100] hidden items-center justify-center bg-black/90 p-4 cursor-zoom-out">
+  <img id="zoom-img" class="max-h-[92vh] max-w-full rounded-xl" alt="">
+</div>
+
+</body>
+</html>

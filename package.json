@@ -1,0 +1,7 @@
+{
+  "name": "my-rag-stories-ui",
+  "private": true,
+  "dependencies": {
+    "@tailwindcss/cli": "^4.1.0"
+  }
+}

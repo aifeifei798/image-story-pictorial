@@ -1,0 +1,14 @@
+# runtime (regenerable)
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+.run/
+
+# precomputed vectors (16 MB, regenerable via build_embeddings.py — needs the
+# local granite llama-server, so they stay out of the repo)
+embeddings.f32
+embeddings.ids.json
+
+# dataset images (1.5 GB, stay local — app falls back to remote image_url)
+downloaded_images/

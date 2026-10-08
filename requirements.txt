@@ -1,0 +1,3 @@
+# Run: uv pip install -r requirements.txt --python .venv
+fastapi
+uvicorn
