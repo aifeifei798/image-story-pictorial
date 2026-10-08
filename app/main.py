@@ -5,10 +5,12 @@ from __future__ import annotations
 import os
 import pathlib
 import secrets
+import time
+from collections import deque
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, Path, Query, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi import FastAPI, File, Form, Header, HTTPException, Path, Query, Request, UploadFile
+from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 
 from . import embeddings as EMB
 from .dataset import (
@@ -21,14 +23,17 @@ from .dataset import (
     IMAGE_DIR,
     MISSING_LOCAL,
     ORDER_NEW,
+    PENDING,
     POS,
     SORTED_NEW,
     SORTED_OLD,
     STORIES,
     TAG_DISPLAY,
     TAG_INDEX,
-    paginate,
     persist_raw,
+    remove_record,
+    set_status,
+    paginate,
     random_stories,
     register_record,
     search,
@@ -44,18 +49,64 @@ if not UPLOAD_TOKEN:
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
 # ---------------------------------------------------------------------------
-# Static assets (the Tailwind UI)
+# Security headers (TLS/HSTS belong to the reverse proxy, see deploy/Caddyfile)
 # ---------------------------------------------------------------------------
 
-STATIC_DIR = pathlib.Path(__file__).resolve().parent / "static"
-HTML = {"Cache-Control": "no-cache"}
-ASSET = {"Cache-Control": "public, max-age=31536000, immutable"}
+SEC_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "SAMEORIGIN",
+    "Referrer-Policy": "same-origin",
+    "Content-Security-Policy": (
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https://feimatrix.com; "
+        "connect-src 'self'; base-src 'none'; form-action 'self'"
+    ),
+}
 
 app = FastAPI(
     title="my_rag_stories",
     description="Browse, tag-filter, keyword-search and semantic-search 10k "
     "image stories; images are streamed from downloaded_images/ as image/webp.",
+    docs_url=None if not os.environ.get("DEV_DOCS") else "/docs",
+    redoc_url=None,
 )
+
+# ---------------------------------------------------------------------------
+# Static assets (the Tailwind UI)
+# ---------------------------------------------------------------------------
+
+STATIC_DIR = pathlib.Path(__file__).resolve().parent / "static"
+HTML = {"Cache-Control": "no-cache", **SEC_HEADERS}
+ASSET = {"Cache-Control": "public, max-age=31536000, immutable", **SEC_HEADERS}
+
+# ---------------------------------------------------------------------------
+# Rate limiting for the expensive routes. Behind a reverse proxy the peer is
+# the proxy itself, so prefer X-Forwarded-For (first hop).
+# ---------------------------------------------------------------------------
+
+RATE_WINDOW = 20.0
+RATE_MAX = 15
+_rate_hist: dict[str, deque] = {}
+
+
+def _rate(request: Request) -> None:
+    fwd = request.headers.get("x-forwarded-for")
+    ip = (fwd.split(",")[0].strip() if fwd else None) or (request.client and request.client.host) or "?"
+    now = time.monotonic()
+    hist = _rate_hist.setdefault(ip, deque())
+    while hist and now - hist[0] > RATE_WINDOW:
+        hist.popleft()
+    if len(hist) >= RATE_MAX:
+        raise HTTPException(status_code=429, detail="too many requests, slow down")
+    hist.append(now)
+    if len(_rate_hist) > 5000:
+        _rate_hist.clear()
+
+
+def _require_upload_token(x_upload_token: str | None) -> None:
+    if not x_upload_token or not secrets.compare_digest(x_upload_token, UPLOAD_TOKEN):
+        raise HTTPException(status_code=401, detail="bad or missing X-Upload-Token")
 
 
 # ---------------------------------------------------------------------------
@@ -98,14 +149,16 @@ def static_asset(name: str = Path(..., pattern=r"^[\w.-]+$")):
 
 @app.get("/api/health")
 def health() -> dict:
+    emb = {k: v for k, v in EMB.status(len(STORIES)).items() if k != "url"}
     return {
         "total": len(BY_ID),
+        "pending": len(PENDING),
         "tags": len(TAG_INDEX),
         "editors": len(EDITOR_INDEX),
         "date_min": DATE_MIN,
         "date_max": DATE_MAX,
-        "missing_local_images": MISSING_LOCAL,
-        "embedding": EMB.status(len(STORIES)),
+        "missing_local_images": len(MISSING_LOCAL),
+        "embedding": emb,
     }
 
 
@@ -174,7 +227,7 @@ def get_image(story_id: str):
     return FileResponse(
         r["_local_image"],
         media_type="image/webp",
-        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        headers={"Cache-Control": "public, max-age=31536000, immutable", **SEC_HEADERS},
     )
 
 
@@ -284,10 +337,12 @@ def stories_by_editor(
 
 @app.get("/api/search")
 def search_stories(
+    request: Request,
     q: str = Query(..., min_length=1),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=50),
 ) -> dict:
+    _rate(request)
     hits = search(q)
     meta, window = paginate(hits, page, page_size)
     return {
@@ -312,11 +367,13 @@ def _require_vectors() -> None:
 
 @app.get("/api/semantic")
 def semantic_search(
+    request: Request,
     q: str = Query(..., min_length=1),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=50),
 ) -> dict:
     """Cosine search over title+tags+story_text embeddings, best first."""
+    _rate(request)
     _require_vectors()
     try:
         vec = EMB.embed_inputs([q[: EMB.MAX_CHARS]])[0]
@@ -347,9 +404,11 @@ def semantic_search(
 @app.get("/api/similar/{story_id}")
 def similar_stories(
     story_id: str,
+    request: Request,
     n: int = Query(8, ge=1, le=20),
 ) -> dict:
     """Nearest neighbours of one record's stored vector (no server call)."""
+    _rate(request)
     _require_vectors()
     ids = EMB.row_ids()
     try:
@@ -380,11 +439,15 @@ def get_random(n: int = Query(1, ge=1, le=20)) -> dict:
 
 # ---------------------------------------------------------------------------
 # Upload (API only, no UI). Auth: X-Upload-Token header == $UPLOAD_TOKEN.
+# Uploads land as status=pending: invisible to every public route until
+# approved. Embedding happens at approve time, so a dead embedding service
+# never blocks ingestion.
 # ---------------------------------------------------------------------------
 
 
 @app.post("/api/upload", status_code=201)
 async def upload_story(
+    request: Request,
     image: UploadFile = File(...),
     title: str = Form(...),
     story_text: str = Form(...),
@@ -392,13 +455,9 @@ async def upload_story(
     editor: str = Form(""),
     x_upload_token: str | None = Header(default=None),
 ) -> dict:
-    """Ingest one story: webp + metadata in, embedding computed inline.
-
-    The vector is embedded BEFORE anything is written — a dead embedding
-    service aborts with 502 and leaves no half-written record.
-    """
-    if not x_upload_token or not secrets.compare_digest(x_upload_token, UPLOAD_TOKEN):  # type: ignore[arg-type]
-        raise HTTPException(status_code=401, detail="bad or missing X-Upload-Token")
+    """Ingest one story as pending: webp + metadata in, nothing public yet."""
+    _rate(request)
+    _require_upload_token(x_upload_token)
     title = title.strip()
     story_text = story_text.strip()
     if not title or len(title) > 500:
@@ -414,12 +473,12 @@ async def upload_story(
         raise HTTPException(status_code=400, detail="image must be a .webp file")
 
     sid = secrets.token_hex(12)
-    while sid in BY_ID:
+    while sid in BY_ID or sid in PENDING:
         sid = secrets.token_hex(12)
     raw: dict = {
         "id": sid,
         "title": title,
-        "status": "published",
+        "status": "pending",
         "image_url": None,
         "local_image_path": f"./downloaded_images/{sid}.webp",
         "story_text": story_text,
@@ -430,25 +489,113 @@ async def upload_story(
         raw["editor"] = editor.strip()
 
     try:
-        vec = EMB.embed_inputs([EMB.record_text(raw)])[0]
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502, detail=f"embedding 服务不可达 ({EMB.EMBED_URL}): {exc}"
-        )
-    try:
         IMAGE_DIR.mkdir(parents=True, exist_ok=True)
         (IMAGE_DIR / f"{sid}.webp").write_bytes(blob)
         persist_raw(raw)
-        embedded = EMB.try_append(vec, sid, len(STORIES))
-        rec = register_record(raw)
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"upload failed: {exc}")
+    PENDING[sid] = raw
     return {
         "id": sid,
+        "status": "pending",
         "image": f"/api/images/{sid}",
-        "editor": rec.get("_editor"),
+        "editor": raw.get("editor"),
         "tags": tag_list,
-        "embedded": embedded,
+        "next": f"POST /api/approve/{sid} to publish",
     }
+
+
+@app.get("/api/pending")
+def list_pending(x_upload_token: str | None = Header(default=None)) -> dict:
+    """Pending (not yet public) uploads, newest first."""
+    _require_upload_token(x_upload_token)
+    items = sorted(PENDING.values(), key=lambda r: r.get("created_at") or "", reverse=True)
+    return {
+        "total": len(items),
+        "items": [
+            {
+                "id": r["id"],
+                "title": r.get("title"),
+                "tags": r.get("tags") or [],
+                "created_at": r.get("created_at"),
+            }
+            for r in items
+        ],
+    }
+
+
+@app.post("/api/approve/{story_id}", status_code=200)
+def approve_story(
+    story_id: str,
+    x_upload_token: str | None = Header(default=None),
+) -> dict:
+    """Publish one pending record: embed, index, flip status in the file."""
+    _require_upload_token(x_upload_token)
+    raw = PENDING.get(story_id)
+    if raw is None:
+        raise HTTPException(status_code=404, detail=f"unknown pending id: {story_id}")
+    raw = dict(raw, status="published")
+    try:
+        vec = EMB.embed_inputs([EMB.record_text(raw)])[0]
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"embedding 服务不可达 ({EMB.EMBED_URL}): {exc} — 记录仍 pending，重试 later",
+        )
+    if not set_status(story_id, "published"):
+        raise HTTPException(status_code=500, detail="status flip failed in JSON file")
+    rec = register_record(raw)
+    embedded = EMB.try_append(vec, story_id, len(STORIES) - 1)
+    PENDING.pop(story_id, None)
+    return {"id": story_id, "status": "published", "embedded": embedded}
+
+
+@app.post("/api/reject/{story_id}", status_code=200)
+def reject_story(
+    story_id: str,
+    x_upload_token: str | None = Header(default=None),
+) -> dict:
+    """Drop a pending record: out of the JSON file and off disk."""
+    _require_upload_token(x_upload_token)
+    if story_id not in PENDING:
+        raise HTTPException(status_code=404, detail=f"unknown pending id: {story_id}")
+    removed = remove_record(story_id)
+    img = IMAGE_DIR / f"{story_id}.webp"
+    try:
+        img.unlink()
+    except FileNotFoundError:
+        pass
+    PENDING.pop(story_id, None)
+    return {"id": story_id, "status": "rejected", "removed_from_file": removed}
+
+
+# ---------------------------------------------------------------------------
+# Crawler bits (only meaningful once SITE_URL is set by the proxy/deploy)
+# ---------------------------------------------------------------------------
+
+SITE_URL = os.environ.get("SITE_URL", "").rstrip("/")
+
+
+@app.get("/robots.txt", include_in_schema=False)
+def robots() -> PlainTextResponse:
+    lines = ["User-Agent: *", "Allow: /"]
+    if SITE_URL:
+        lines.append(f"Sitemap: {SITE_URL}/sitemap.xml")
+    return PlainTextResponse("\n".join(lines) + "\n", headers=HTML)
+
+
+@app.get("/sitemap.xml", include_in_schema=False)
+def sitemap() -> PlainTextResponse:
+    if not SITE_URL:
+        raise HTTPException(status_code=404, detail="set SITE_URL to serve a sitemap")
+    urls = "".join(
+        f"<url><loc>{SITE_URL}/story?id={r['id']}</loc></url>" for r in SORTED_NEW[:2000]
+    )
+    body = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        f"{urls}</urlset>"
+    )
+    return PlainTextResponse(body, media_type="application/xml", headers=HTML)

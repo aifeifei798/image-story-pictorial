@@ -38,11 +38,19 @@ No git repo, no CI, no tests. README.md is accurate — trust it, keep it in syn
 - Upload: `POST /api/upload` (multipart webp + title/story_text required,
   tags/editor optional; `X-Upload-Token` == `$UPLOAD_TOKEN`, gate crashes
   startup if unset). `serve.sh start` generates/persists the token in
-  `.run/upload_token` (gitignored) so restarts keep working. Embed-before-write:
-  a dead embedding service 502s with nothing persisted. Memory indices
-  hot-update via `dataset.register_record` (newest-first head inserts + `POS`
-  rebuild) and `EMB.try_append` (only when a complete matrix exists, else
-  `embedded: false` — backfill with `build_embeddings.py`).
+  `.run/upload_token` (KEY=VALUE, gitignored — systemd's EnvironmentFile reads
+  it too). Uploads land `status: pending` in `PENDING` (dataset.py splits them
+  at import) — invisible to every public route until `POST /api/approve/{id}`
+  (embeds + `register_record` + `try_append`; 502 if the embedding service is
+  down, record stays pending) or dropped by `POST /api/reject/{id}`.
+  `persist_raw`/`set_status`/`remove_record` hold an flock on `.run/dataset.lock`
+  so concurrent uploads never race on the single JSON file. `register_record`
+  inserts by `created_at` bisect (approve order ≠ upload order). Memory indices
+  hot-update via `register_record` + `EMB.try_append` (only when a complete
+  matrix exists, else `embedded: false` — backfill with `build_embeddings.py`).
+- `MAX_CHARS = 24000` (≈6k tokens, fits an 8192-token llama-server context,
+  `-c 8192`). Changing it invalidates the old matrix — re-run
+  `build_embeddings.py` after any `record_text`/MAX_CHARS change.
 
 ## Frontend notes (`app/static/app.js`, no framework)
 

@@ -47,6 +47,31 @@ parse). Images are never preloaded — each is streamed with `sendfile`.
 Without `downloaded_images/`, image requests `307`-redirect to the remote
 `image_url`, so the site still works.
 
+## Deploy on a small (1 GB) box
+
+The site runs on a 1 GB VPS ("chicken") with these rules:
+
+- **swap first**: `sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile` and add to `/etc/fstab`. Startup peak is ~520 MB; without swap the box OOM-kills during boot.
+- **one uvicorn worker, always**: all indices are in-memory and uploads rewrite
+  one JSON file — multiple workers fork the dataset and race on writes.
+- **systemd, not serve.sh**: `deploy/systemd.service` (capped at 700 MB RSS,
+  restarts on crash, journald instead of a growing serve.log). serve.sh stays
+  for local dev.
+- **Caddy in front**: `deploy/Caddyfile` — TLS + HSTS terminate at the proxy,
+  uvicorn stays plain HTTP on 127.0.0.1:8000. Caddy also sets `X-Forwarded-For`
+  for the app's rate limiter (15 requests / 20 s per IP on search/semantic/similar/upload).
+- **backup cron**: `deploy/backup.sh` snapshots the JSON + vectors (keep 5) —
+  one corrupt write means all 10k records.
+- **embedding service**: Granite-97M llama-server needs ~300-500 MB — on a 1 GB
+  box it fits only with swap and a small context (`-c 512 -t 1`), and semantic
+  queries will be slow. Alternative: keep the chicken browse-only (semantic
+  answers 503 by design) and tunnel `EMBED_URL` from the big box
+  (`ssh -R 8023:localhost:8023 bigbox`).
+- memory budget: app ~300 MB + Caddy ~50 MB + embedding ~400 MB ≈ 750 MB —
+  tight but survivable with swap; vectors are stored as `array('f')` rows
+  (~16 MB) instead of Python float lists (~130 MB) to keep the app under
+  ~300 MB.
+
 ## Web UI
 
 Open `http://localhost:8000/` — the browser fetches the same JSON API and paints
@@ -119,7 +144,10 @@ or `tailwind.css`, bump the `?v=N` query on the `<link>`/`<script>` refs.
 | `GET /api/semantic?q=&page=` | cosine search over Granite-Embedding-97M vectors |
 | `GET /api/similar/{id}?n=8` | nearest neighbours of one record (n ≤ 20, no server call) |
 | `GET /api/random?n=1` | n ≤ 20 |
-| `POST /api/upload` | ingest one story: multipart `image` (.webp) + `title` + `story_text` (required), `tags` (comma-separated) + `editor` (optional). Header `X-Upload-Token` must equal `$UPLOAD_TOKEN`. The vector is embedded inline (502 if the embedding service is down, nothing written); indices hot-update, no restart needed |
+| `POST /api/upload` | ingest one story: multipart `image` (.webp) + `title` + `story_text` (required), `tags` (comma-separated) + `editor` (optional). Header `X-Upload-Token` must equal `$UPLOAD_TOKEN`. Lands as `status: pending` — invisible to every public route until approved |
+| `GET /api/pending` | list pending uploads (token) |
+| `POST /api/approve/{id}` | publish one pending record: embed + index + flip status (token; 502 if the embedding service is down, record stays pending) |
+| `POST /api/reject/{id}` | drop a pending record from the JSON file and disk (token) |
 
 Paging: `page` ≥ 1, `page_size` 1–50, responses carry
 `{total, page, page_size, pages, items}`.

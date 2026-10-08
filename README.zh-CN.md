@@ -47,6 +47,18 @@ parse). Images are never preloaded — each is streamed with `sendfile`.
 Without `downloaded_images/`, image requests `307`-redirect to the remote
 `image_url`, so the site still works.
 
+## 部署在 1G 小鸡
+
+这套在 1G 内存 VPS（"小鸡"）能跑，规则：
+
+- **swap 先**：`sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile` 并 `/etc/fstab`里。启动峰值 ~520 MB，无 swap 即 OOM-kill 里。
+- **uvicorn 单 worker，永远**：索引全在内存，上传重写单 JSON 文件——多 worker 即数据集 fork + 写 race。
+- **systemd 而非 serve.sh**：`deploy/systemd.service`（RSS 700M 里封顶、崩自动重启、journald 而非 growing serve.log）。serve.sh 保持 for 本地 dev。
+- **Caddy 前面**：`deploy/Caddyfile` — TLS + HSTS 终结 at 代理，uvicorn 保持 plain HTTP on 127.0.0.1:8000。Caddy 也 set `X-Forwarded-For` for 的 app 的 rate limiter（15 req / 20 s per IP on search/semantic/similar/upload）。
+- **backup cron**：`deploy/backup.sh` 快照 JSON + vectors（keep 5）——one corrupt write 即 all 10k records 全灭。
+- **embedding 服务**：Granite-97M llama-server 需要 ~300-500 MB——1G 小鸡里 only fits with swap + small context (`-c 512 -t 1`)，semantic 查询 will be slow。Alternative: 小鸡 keep browse-only（semantic 503 by design）+ tunnel `EMBED_URL` from 大 box（`ssh -R 8023:localhost:8023 bigbox`）。
+- memory budget: app ~300 MB + Caddy ~50 MB + embedding ~400 MB ≈ 750 MB——tight but survivable with swap；vectors 是 stored as `array('f')` rows (~16 MB) instead of Python float lists (~130 MB) to keep the app under ~300 MB.
+
 ## Web UI
 
 Open `http://localhost:8000/` — the browser fetches the same JSON API and paints
@@ -120,8 +132,10 @@ or `tailwind.css`, bump the `?v=N` query on the `<link>`/`<script>` refs.
 | `GET /api/semantic?q=&page=` | cosine search over Granite-Embedding-97M vectors |
 | `GET /api/similar/{id}?n=8` | nearest neighbours of one record (n ≤ 20, no server call) |
 | `GET /api/random?n=1` | n ≤ 20 |
-| `POST /api/upload` | 上传一条故事：multipart `image`（.webp）+ `title` + `story_text`（必填），`tags`（逗号分隔）+ `editor`（选填）。请求头 `X-Upload-Token` 必须等于 `$UPLOAD_TOKEN`。向量实时计算（embedding 服务挂了就 502，什么都不写）；索引热更新，无需重启 |
-
+| `POST /api/upload` | 上传一条故事：multipart `image`（.webp）+ `title` + `story_text`（必填），`tags`（逗号分隔）+ `editor`（选填）。请求头 `X-Upload-Token` 必须等于 `$UPLOAD_TOKEN`。落盘为 `status: pending`，完全隐形到所有公开路由 until 批准 |
+| `GET /api/pending` | 列出待审上传（token） |
+| `POST /api/approve/{id}` | 发布一条待审记录：embed + 索引 + 翻 status（token；embedding 服务挂了就 502，记录 stays pending） |
+| `POST /api/reject/{id}` | 删除一条待审记录（JSON 里 + 磁盘里）（token） |
 Paging: `page` ≥ 1, `page_size` 1–50, responses carry
 `{total, page, page_size, pages, items}`.
 

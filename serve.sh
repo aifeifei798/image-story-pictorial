@@ -116,16 +116,17 @@ start() {
   # /api/upload needs X-Upload-Token == $UPLOAD_TOKEN (main.py hard-gates on
   # it). Reuse a persisted token so restarts don't need manual export; an
   # explicitly exported UPLOAD_TOKEN always wins and is saved for next time.
+  # The file is KEY=VALUE so systemd's EnvironmentFile can read it too.
   if [[ -z "${UPLOAD_TOKEN:-}" && -f "$RUN_DIR/upload_token" ]]; then
-    UPLOAD_TOKEN="$(cat "$RUN_DIR/upload_token")"
+    UPLOAD_TOKEN="$(sed 's/^UPLOAD_TOKEN=//' "$RUN_DIR/upload_token")"
   fi
   if [[ -z "${UPLOAD_TOKEN:-}" ]]; then
     UPLOAD_TOKEN="$("$(dirname "$UVICORN")/python" -c 'import secrets; print(secrets.token_hex(16))')"
-    printf '%s' "$UPLOAD_TOKEN" >"$RUN_DIR/upload_token"
+    printf 'UPLOAD_TOKEN=%s\n' "$UPLOAD_TOKEN" >"$RUN_DIR/upload_token"
     chmod 600 "$RUN_DIR/upload_token"
     echo "generated upload token, saved to $RUN_DIR/upload_token"
   else
-    printf '%s' "$UPLOAD_TOKEN" >"$RUN_DIR/upload_token"
+    printf 'UPLOAD_TOKEN=%s\n' "$UPLOAD_TOKEN" >"$RUN_DIR/upload_token"
     chmod 600 "$RUN_DIR/upload_token"
   fi
   export UPLOAD_TOKEN

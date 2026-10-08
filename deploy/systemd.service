@@ -1,0 +1,29 @@
+# systemd unit for the 1 GB box. Install:
+#   sudo cp deploy/systemd.service /etc/systemd/system/image-story.service
+#   sudo systemctl enable --now image-story
+#
+# Assumes the repo lives at /srv/image-story-pictorial (adjust WorkingDirectory)
+# and .venv was rebuilt there (uv pip install -r requirements.txt --python .venv).
+# UPLOAD_TOKEN comes from .run/upload_token — the same file serve.sh maintains,
+# written as KEY=VALUE so EnvironmentFile can read it.
+
+[Unit]
+Description=image-story-pictorial gallery (uvicorn, single worker on purpose)
+# one worker only: all indices are in-memory and uploads rewrite one JSON
+# file; multiple workers would fork the dataset and race on writes.
+
+[Service]
+WorkingDirectory=/srv/image-story-pictorial
+EnvironmentFile=-/srv/image-story-pictorial/.run/upload_token
+ExecStart=/srv/image-story-pictorial/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
+Restart=always
+RestartSec=3
+
+# Hard memory cap: on a 1 GB box a runaway process must die + restart rather
+# than swap-thrash the whole machine. Steady RSS ~250-300 MB, startup peak
+# ~520 MB, so 700M leaves headroom while refusing anything pathological.
+MemoryLimit=700M
+
+# logs go to journald, not an ever-growing serve.log
+StandardOutput=journal
+StandardError=journal

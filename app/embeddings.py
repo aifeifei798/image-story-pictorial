@@ -16,6 +16,7 @@ ranking is a pure-Python dot loop (~0.15 s over 10k rows).
 
 from __future__ import annotations
 
+import array
 import heapq
 import json
 import os
@@ -28,7 +29,7 @@ EMBED_FILE = os.path.join(BASE_DIR, os.environ.get("EMBED_FILE", "embeddings.f32
 EMBED_IDS = os.path.join(BASE_DIR, os.environ.get("EMBED_IDS", "embeddings.ids.json"))
 
 DIM = 384
-MAX_CHARS = 3000  # keeps every record well under the 1024-token server slot
+MAX_CHARS = 24000  # ≈6k tokens — fits an 8192-token llama-server context (-c 8192)
 
 
 def record_text(r: dict) -> str:
@@ -74,7 +75,7 @@ _IDS: list[str] = []
 _LOADED_FOR: int = -1
 
 
-def _read_matrix() -> tuple[list[list[float]], list[str]] | None:
+def _read_matrix() -> tuple[list[array], list[str]] | None:
     if not (os.path.isfile(EMBED_FILE) and os.path.isfile(EMBED_IDS)):
         return None
     with open(EMBED_IDS, encoding="utf-8") as fh:
@@ -83,16 +84,16 @@ def _read_matrix() -> tuple[list[list[float]], list[str]] | None:
     size = os.path.getsize(EMBED_FILE)
     if n == 0 or size != n * DIM * 4:
         return None
-    with open(EMBED_FILE, "rb") as fh:
-        raw = fh.read()
-    vecs: list[list[float]] = []
-    off = 0
     step = DIM * 4
-    unpack = struct.unpack
     fmt = f"<{DIM}f"
-    for _ in range(n):
-        vecs.append(list(unpack(fmt, raw[off : off + step])))
-        off += step
+    vecs: list[array.array] = []
+    with open(EMBED_FILE, "rb") as fh:
+        while True:
+            chunk = fh.read(step * 512)
+            if not chunk:
+                break
+            for row in struct.iter_unpack(fmt, chunk):
+                vecs.append(array.array("f", row))
     return vecs, ids
 
 
@@ -154,7 +155,7 @@ def try_append(vec: list[float], sid: str, total_before: int) -> bool:
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(_IDS + [sid], fh)
     os.replace(tmp, EMBED_IDS)
-    _VECTORS.append([float(x) for x in vec])  # type: ignore[union-attr]
+    _VECTORS.append(array.array("f", vec))  # type: ignore[union-attr]
     _IDS.append(sid)
     _LOADED_FOR = total_before + 1  # memory now matches disk; skip a reload
     return True

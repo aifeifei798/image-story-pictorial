@@ -12,3 +12,6 @@ embeddings.ids.json
 
 # dataset images (1.5 GB, stay local — app falls back to remote image_url)
 downloaded_images/
+
+# snapshots written by deploy/backup.sh
+.backups/

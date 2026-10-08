@@ -7,15 +7,18 @@ Images themselves are never preloaded; they are streamed by FileResponse.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import random
 import re
+import time
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 DATA_FILE = BASE_DIR / "my_rag_stories.json"
 IMAGE_DIR = BASE_DIR / "downloaded_images"
+LOCK_FILE = BASE_DIR / ".run" / "dataset.lock"
 
 # ---------------------------------------------------------------------------
 # Loading
@@ -67,9 +70,13 @@ def _local_image(record: dict) -> str | None:
 STORIES: list[dict] = []
 BY_ID: dict[str, dict] = {}
 MISSING_LOCAL: list[str] = []
+PENDING: dict[str, dict] = {}  # uploaded but not yet approved; invisible to all public routes
 
 for _rec in _RAW:
     _rec = dict(_rec)
+    if _rec.get("status") == "pending":
+        PENDING[_rec["id"]] = _rec
+        continue
     _rec["_local_image"] = _local_image(_rec)
     _rec["_size"] = _webp_size(_rec["_local_image"]) if _rec["_local_image"] else None
     _rec["_created_sort"] = _rec.get("created_at") or ""
@@ -260,55 +267,146 @@ def make_record(raw: dict) -> dict:
 
 
 def persist_raw(raw: dict) -> None:
-    """Atomically append a raw record to my_rag_stories.json.
+    """Atomically append a raw record to my_rag_stories.json (under lock).
 
     The file is ``indent=2, ensure_ascii=False`` — dumping with the same
     parameters keeps every existing byte untouched.
     """
-    tmp = DATA_FILE.with_suffix(".json.tmp")
-    with open(DATA_FILE, encoding="utf-8") as fh:
-        data = json.load(fh)
-    data.append({k: v for k, v in raw.items() if not k.startswith("_")})
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, ensure_ascii=False, indent=2)
-    os.replace(tmp, DATA_FILE)
+    with _DatasetLock(LOCK_FILE):
+        tmp = DATA_FILE.with_suffix(".json.tmp")
+        with open(DATA_FILE, encoding="utf-8") as fh:
+            data = json.load(fh)
+        data.append({k: v for k, v in raw.items() if not k.startswith("_")})
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, DATA_FILE)
+
+
+def set_status(sid: str, status: str) -> bool:
+    """Rewrite one record's ``status`` in the JSON file under the lock."""
+    with _DatasetLock(LOCK_FILE):
+        with open(DATA_FILE, encoding="utf-8") as fh:
+            data = json.load(fh)
+        hit = False
+        for rec in data:
+            if rec.get("id") == sid:
+                rec["status"] = status
+                hit = True
+                break
+        if not hit:
+            return False
+        tmp = DATA_FILE.with_suffix(".json.tmp")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, DATA_FILE)
+        return hit
+
+
+def remove_record(sid: str) -> bool:
+    """Drop one record from the JSON file under the lock."""
+    with _DatasetLock(LOCK_FILE):
+        with open(DATA_FILE, encoding="utf-8") as fh:
+            data = json.load(fh)
+        kept = [rec for rec in data if rec.get("id") != sid]
+        if len(kept) == len(data):
+            return False
+        tmp = DATA_FILE.with_suffix(".json.tmp")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(kept, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, DATA_FILE)
+        return True
+
+
+class _DatasetLock:
+    """Blocking flock on a side lock file; use as a with-statement."""
+
+    def __init__(self, path: Path):
+        self.path = path
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.fh = open(self.path, "a+")
+        fcntl.flock(self.fh, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        fcntl.flock(self.fh, fcntl.LOCK_UN)
+        self.fh.close()
+        return False
+
+
+def _bisect_records(recs: list[dict], key: str) -> int:
+    """Insertion index for ``key`` in an oldest-first record list."""
+    lo, hi = 0, len(recs)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if recs[mid]["_created_sort"] < key:
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo
+
+
+def _pos_newest(ids: list[str], key: str) -> int:
+    """Insertion index for ``key`` in a newest-first id list."""
+    lo, hi = 0, len(ids)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if BY_ID[ids[mid]]["_created_sort"] > key:
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo
 
 
 def register_record(raw: dict) -> dict:
     """Index an already-persisted raw record in every in-memory structure.
 
-    The record must be the newest one (``created_at`` >= ``DATE_MAX``), so it
-    goes to the head of each newest-first index. Returns the derived record.
+    Insertion is by ``created_at`` (bisect), not head, so approving an older
+    pending record keeps every newest-first index ordered. Returns the derived
+    record.
     """
     global DATE_MAX
     r = make_record(raw)
     sid = r["id"]
     BY_ID[sid] = r
     STORIES.append(r)
-    SORTED_NEW.insert(0, r)
-    SORTED_OLD.append(r)
-    ORDER_NEW.insert(0, sid)
-    for i, s in enumerate(ORDER_NEW):
-        POS[s] = i
+    key = r["_created_sort"]
+    # newest-first: first position whose created_at < key
+    lo, hi = 0, len(SORTED_NEW)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if SORTED_NEW[mid]["_created_sort"] > key:
+            lo = mid + 1
+        else:
+            hi = mid
+    SORTED_NEW.insert(lo, r)
+    SORTED_OLD.insert(_bisect_records(SORTED_OLD, key), r)
+    ORDER_NEW.insert(lo, sid)
+    for i in range(lo, len(ORDER_NEW)):
+        POS[ORDER_NEW[i]] = i
     for t in r.get("tags") or []:
-        key = t.strip().lower()
-        if not key:
+        k = t.strip().lower()
+        if not k:
             continue
-        TAG_INDEX.setdefault(key, []).insert(0, sid)
-        TAG_DISPLAY.setdefault(key, t)
+        ids = TAG_INDEX.setdefault(k, [])
+        ids.insert(_pos_newest(ids, key), sid)
+        TAG_DISPLAY.setdefault(k, t)
     day = (r.get("created_at") or "")[:10]
     if len(day) == 10 and day[4] == "-" and day[7] == "-":
-        DATE_INDEX.setdefault(day, []).insert(0, sid)
+        ids = DATE_INDEX.setdefault(day, [])
+        ids.insert(_pos_newest(ids, key), sid)
     if r.get("_editor"):
-        key = r["_editor"].strip().lower()
-        if key:
-            EDITOR_INDEX.setdefault(key, []).insert(0, sid)
-            EDITOR_DISPLAY.setdefault(key, r["_editor"])
+        k = r["_editor"].strip().lower()
+        if k:
+            ids = EDITOR_INDEX.setdefault(k, [])
+            ids.insert(_pos_newest(ids, key), sid)
+            EDITOR_DISPLAY.setdefault(k, r["_editor"])
     SEARCH[sid] = (
         (r.get("title") or "").lower(),
         " ".join(r.get("tags") or []).lower(),
         (r.get("story_text") or "").lower(),
     )
-    if r["_created_sort"] >= DATE_MAX:
-        DATE_MAX = r["_created_sort"]
+    if key >= DATE_MAX:
+        DATE_MAX = key
     return r

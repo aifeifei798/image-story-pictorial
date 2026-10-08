@@ -1,0 +1,19 @@
+# Caddy reverse proxy + free ACME TLS for the 1 GB box.
+#   sudo apt install caddy   (static binary ~15 MB, lighter than nginx)
+#   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+# Caddy terminates HTTPS at 127.0.0.1:8000 (uvicorn stays plain HTTP locally)
+# and sets X-Forwarded-For, which the app's rate limiter reads.
+# Replace example.com with your real domain; a certificate is fetched on the
+# first request. Also export SITE_URL=https://your.domain in the env file so
+# the sitemap route works.
+
+example.com {
+  tls example@example.com
+  hsts {
+    seconds 31622400
+    direct
+  }
+  proxy / 127.0.0.1:8000 {
+    continue
+  }
+}
