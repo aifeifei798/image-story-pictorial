@@ -30,7 +30,7 @@ for block in re.findall(r"([^{};]+)\{", css):
         if sel:
             compiled.add(sel)
 
-custom = {"sk", "drift-a", "drift-b", "first-line", "grain"}
+custom = {"sk", "drift-a", "drift-b", "first-line", "grain", "skip-link"}
 tokens: set[str] = set()
 for name in ("index.html", "story.html", "app.js"):
     src = (STATIC / name).read_text()
