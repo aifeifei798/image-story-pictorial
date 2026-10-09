@@ -101,7 +101,10 @@ function card(rec, terms) {
 function chipWall(items, attr) {
   attr = attr || "tag";
   const key = attr === "editor" ? "editor" : "tag";
-  const wrap = el("div", "w-full flex flex-wrap items-center gap-3");
+  // col-span-full: the grid's other children are 1-column cards, but a chip
+  // wall must span the whole row (in the old multicol layout it just filled
+  // the flow width, so this was invisible until the grid switch broke it)
+  const wrap = el("div", "w-full col-span-full flex flex-wrap items-center gap-3");
   const max = items.length ? items[0].count : 1;
   items.forEach((t) => {
     const name = t[key];
