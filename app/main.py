@@ -5,7 +5,9 @@ from __future__ import annotations
 import os
 import pathlib
 import secrets
+import threading
 import time
+import urllib.parse
 from collections import deque
 from datetime import datetime, timezone
 
@@ -88,6 +90,11 @@ ASSET = {"Cache-Control": "public, max-age=31536000, immutable", **SEC_HEADERS}
 RATE_WINDOW = 20.0
 RATE_MAX = 15
 _rate_hist: dict[str, deque] = {}
+
+# Sync endpoints run in the threadpool, so approval must be serialized: two
+# concurrent approvals would interleave register_record + try_append and
+# desynchronize embeddings.ids.json from embeddings.f32.
+_APPROVE_LOCK = threading.Lock()
 
 
 def _rate(request: Request) -> None:
@@ -216,6 +223,22 @@ def get_story_raw(story_id: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
+REMOTE_IMAGE_HOSTS = {
+    h.strip().lower()
+    for h in os.environ.get("IMAGE_REMOTE_HOSTS", "feimatrix.com").split(",")
+    if h.strip()
+}
+
+
+def _remote_image_allowed(url: str) -> bool:
+    """Only https URLs on a known host — never turn /api/images into an open
+    redirect for whatever a record's ``image_url`` happens to say."""
+    if not url.startswith("https://"):
+        return False
+    host = (urllib.parse.urlparse(url).hostname or "").lower()
+    return any(host == h or host.endswith("." + h) for h in REMOTE_IMAGE_HOSTS)
+
+
 @app.get("/api/images/{story_id}")
 def get_image(story_id: str):
     r = BY_ID.get(story_id)
@@ -223,7 +246,10 @@ def get_image(story_id: str):
         raise HTTPException(status_code=404, detail=f"unknown story id: {story_id}")
     if r["_local_image"] is None:
         # 3 records were never downloaded -> hand the browser the remote URL.
-        return RedirectResponse(r["image_url"], status_code=307)
+        remote = r.get("image_url") or ""
+        if _remote_image_allowed(remote):
+            return RedirectResponse(remote, status_code=307)
+        raise HTTPException(status_code=404, detail="no local image, no trusted remote image")
     return FileResponse(
         r["_local_image"],
         media_type="image/webp",
@@ -545,11 +571,12 @@ def approve_story(
             status_code=502,
             detail=f"embedding 服务不可达 ({EMB.EMBED_URL}): {exc} — 记录仍 pending，重试 later",
         )
-    if not set_status(story_id, "published"):
-        raise HTTPException(status_code=500, detail="status flip failed in JSON file")
-    rec = register_record(raw)
-    embedded = EMB.try_append(vec, story_id, len(STORIES) - 1)
-    PENDING.pop(story_id, None)
+    with _APPROVE_LOCK:
+        if not set_status(story_id, "published"):
+            raise HTTPException(status_code=500, detail="status flip failed in JSON file")
+        rec = register_record(raw)
+        embedded = EMB.try_append(vec, story_id, len(STORIES) - 1)
+        PENDING.pop(story_id, None)
     return {
         "id": story_id,
         "status": "published",
@@ -567,13 +594,13 @@ def reject_story(
     _require_upload_token(x_upload_token)
     if story_id not in PENDING:
         raise HTTPException(status_code=404, detail=f"unknown pending id: {story_id}")
+    PENDING.pop(story_id, None)  # first: a failed unlink must not leave a phantom
     removed = remove_record(story_id)
     img = IMAGE_DIR / f"{story_id}.webp"
     try:
         img.unlink()
-    except FileNotFoundError:
-        pass
-    PENDING.pop(story_id, None)
+    except OSError:
+        pass  # a stray file on disk is harmless; the record is already gone
     return {"id": story_id, "status": "rejected", "removed_from_file": removed}
 
 

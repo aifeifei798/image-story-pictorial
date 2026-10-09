@@ -18,18 +18,24 @@ document.addEventListener("DOMContentLoaded", function () {
     if (!d.id) { stage.innerHTML = "<p class='text-amber-200 text-sm'>" + T("err_unknown") + id + "</p>"; return; }
     document.title = (d.title || d.id) + " · my_rag_stories";
 
+    /* titles/editors/tags are user-supplied data — never interpolate raw */
+    var esc = function (s) {
+      return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    };
+
     const head = document.getElementById("head");
     head.innerHTML =
-      '<h1 class="font-serif italic text-3xl text-white/95 leading-tight tracking-[.01em]">' + (d.title || "") + "</h1>" +
+      '<h1 class="font-serif italic text-3xl text-white/95 leading-tight tracking-[.01em]">' + esc(d.title || "") + "</h1>" +
       '<div class="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-400">' +
-        '<a class="text-slate-500 transition duration-200 hover:text-amber-200" title="' + T("see_day") + '" href="/?date=' + (d.created_at || "").slice(0, 10) + '">' + (d.created_at || "").slice(0, 10) + "</a>" +
-        (d.editor ? '<a class="rounded-full px-2 py-0.5 text-[11px] text-amber-100/80 bg-white/7 transition duration-200 hover:bg-amber-500/25 hover:text-amber-100" href="/?editor=' + encodeURIComponent(d.editor) + '">✎ ' + d.editor + "</a>" : "") +
+        '<a class="text-slate-500 transition duration-200 hover:text-amber-200" title="' + esc(T("see_day")) + '" href="/?date=' + (d.created_at || "").slice(0, 10) + '">' + (d.created_at || "").slice(0, 10) + "</a>" +
+        (d.editor ? '<a class="rounded-full px-2 py-0.5 text-[11px] text-amber-100/80 bg-white/7 transition duration-200 hover:bg-amber-500/25 hover:text-amber-100" href="/?editor=' + encodeURIComponent(d.editor) + '">✎ ' + esc(d.editor) + "</a>" : "") +
         '<span class="px-2 py-0.5 rounded-full bg-white/8 text-amber-100/80">' + (d.tags || []).length + " tags</span>" +
       "</div>";
 
     const img = document.getElementById("frame");
     img.innerHTML =
-      '<img class="block h-auto w-full max-w-full rounded-xl ring-1 ring-white/15 shadow-2xl" src="' + d.image + '" alt="' + (d.title || "") + '"' +
+      '<img class="block h-auto w-full max-w-full rounded-xl ring-1 ring-white/15 shadow-2xl" src="' + d.image + '" alt="' + esc(d.title || "") + '"' +
       (d.image_w ? ' width="' + d.image_w + '" height="' + d.image_h + '"' : "") + '">' +
       '<div class="absolute inset-0 rounded-xl bg-[radial-gradient(circle_at_50%_120%,#d4af3726,transparent)] mix-blend-screen pointer-events-none"></div>';
 
@@ -52,7 +58,6 @@ document.addEventListener("DOMContentLoaded", function () {
     });
 
     const body = document.getElementById("body");
-    var esc = function (s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); };
     var text = (d.story_text || "").replace(/^\s*editor\s*:.*$/gim, ""); // byline shown in head
     var html = "", ledeDone = false;
     ((text.split(/\n\s*\n/))).forEach(function (b) {

@@ -2,7 +2,8 @@
 #   sudo apt install caddy   (static binary ~15 MB, lighter than nginx)
 #   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
 # Caddy terminates HTTPS at 127.0.0.1:8000 (uvicorn stays plain HTTP locally)
-# and sets X-Forwarded-For, which the app's rate limiter reads.
+# and overwrites X-Forwarded-For with the real peer, which is all the app's
+# rate limiter needs.
 # Replace example.com with your real domain; a certificate is fetched on the
 # first request. Also export SITE_URL=https://your.domain in the env file so
 # the sitemap route works.
@@ -13,7 +14,10 @@ example.com {
     seconds 31622400
     direct
   }
-  proxy / 127.0.0.1:8000 {
-    continue
+  # Overwrite X-Forwarded-For with the real peer: Caddy's default is to append,
+  # which lets a client spoof the first hop and dodge (or poison) the app's
+  # per-IP rate limiter.
+  reverse_proxy 127.0.0.1:8000 {
+    header_up X-Forwarded-For {remote_host}
   }
 }

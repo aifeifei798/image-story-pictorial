@@ -19,6 +19,11 @@ function el(tag, cls, txt) {
 function add(parent, node) { parent.appendChild(node); return node; }
 function num(n) { return n == null ? "—" : n.toLocaleString("en-US"); }
 function day(iso) { return iso ? iso.slice(0, 10) : ""; }
+function esc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
 
 function highlight(text, terms) {
   const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -128,7 +133,10 @@ async function paint(page, append) {
     const res = await fetch(endpoint(page));
     data = await res.json();
     if (!res.ok) {
-      head.innerHTML = '<p class="text-amber-200 text-sm">' + (res.status === 404 ? "“" + (data && data.detail ? data.detail : S.tag || S.q) + "” " + T("err_noresult") : T("err_api") + " " + res.status) + "</p>";
+      const detail = res.status === 404
+        ? "“" + esc(data && data.detail ? data.detail : (S.tag || S.q)) + "” " + T("err_noresult")
+        : T("err_api") + " " + res.status;
+      head.innerHTML = '<p class="text-amber-200 text-sm">' + detail + "</p>";
       return;
     }
   } catch (err) {

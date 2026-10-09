@@ -48,6 +48,18 @@ No git repo, no CI, no tests. README.md is accurate — trust it, keep it in syn
   inserts by `created_at` bisect (approve order ≠ upload order). Memory indices
   hot-update via `register_record` + `EMB.try_append` (only when a complete
   matrix exists, else `embedded: false` — backfill with `build_embeddings.py`).
+  Approve's mutate section (`set_status` + `register_record` + `try_append`)
+  runs under `_APPROVE_LOCK` — sync handlers share the threadpool and two
+  concurrent approvals would desync `embeddings.ids.json` from the .f32 file.
+  `/api/reject/{id}` pops PENDING *before* touching the file/disk so a failed
+  unlink can't leave a phantom pending record.
+- `/api/images/{id}` 307s to a record's `image_url` only for https hosts in
+  `IMAGE_REMOTE_HOSTS` (default `feimatrix.com`, subdomains included) — that
+  keeps the route from becoming an open redirect for dataset-controlled URLs.
+- Frontend escaping: titles/editors/tags are data, so `app.js` (`esc()`) and
+  `story.html`'s inline script escape every interpolation. Adding a new
+  `innerHTML` sink for API content needs the same treatment — and bump the
+  `?v=` in the HTML after touching `app.js`.
 - `MAX_CHARS = 3000` (≈750 tokens — fits the 1024-token slot of llama-server
   `-c 8192 --parallel 8`). Changing it invalidates the old matrix — re-run
   `build_embeddings.py` after any `record_text`/MAX_CHARS change. Slot math:

@@ -45,7 +45,9 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
 Startup loads the JSON once (~0.5 s, ~85 MB steady RSS, ~520 MB peak during
 parse). Images are never preloaded — each is streamed with `sendfile`.
 Without `downloaded_images/`, image requests `307`-redirect to the remote
-`image_url`, so the site still works.
+`image_url`, so the site still works — but only for https hosts里
+`IMAGE_REMOTE_HOSTS`（default `feimatrix.com`），so the redirect can't be
+aimed at an arbitrary address.
 
 ## 部署在 1G 小鸡
 
@@ -54,7 +56,7 @@ Without `downloaded_images/`, image requests `307`-redirect to the remote
 - **swap 先**：`sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile` 并 `/etc/fstab`里。启动峰值 ~520 MB，无 swap 即 OOM-kill 里。
 - **uvicorn 单 worker，永远**：索引全在内存，上传重写单 JSON 文件——多 worker 即数据集 fork + 写 race。
 - **systemd 而非 serve.sh**：`deploy/systemd.service`（RSS 封顶 700M、崩溃自动重启、journald 而非 growing serve.log）。serve.sh 保持 for 本地 dev。
-- **Caddy 前面**：`deploy/Caddyfile` — TLS + HSTS 终结 at 代理，uvicorn 保持 plain HTTP on 127.0.0.1:8000。Caddy 也 set `X-Forwarded-For` for 的 app 的 rate limiter（15 req / 20 s per IP on search/semantic/similar/upload）。
+- **Caddy 前面**：`deploy/Caddyfile` — TLS + HSTS 终结 at 代理，uvicorn 保持 plain HTTP on 127.0.0.1:8000。Caddy 里 `X-Forwarded-For` 里 overwrite with the real peer for 的 app 的 rate limiter（15 req / 20 s per IP on search/semantic/similar/upload）——append 即 first hop spoofable。
 - **backup cron**：`deploy/backup.sh` 快照 JSON + vectors（keep 5）——one corrupt write 即 all 10k records 全灭。
 - **embedding 服务**：Granite-97M llama-server 需要 ~300-500 MB——在 1G 小鸡里它 only fits with swap + small context (`-c 512 -t 1`)，semantic 查询 will be slow。Alternative: 小鸡 keep browse-only（semantic 503 by design）+ tunnel `EMBED_URL` from 大 box（`ssh -R 8023:localhost:8023 bigbox`）。
 - memory budget: app ~300 MB + Caddy ~50 MB + embedding ~400 MB ≈ 750 MB——tight but survivable with swap；vectors 是 stored as `array('f')` rows (~16 MB) instead of Python float lists (~130 MB) to keep the app under ~300 MB.
@@ -202,6 +204,16 @@ package.json        @tailwindcss/cli ^4.1.0
 （默认 `http://localhost:8023`）。`/api/health` 的 `embedding` 段给出
 `indexed/total/ready/live` 状态。
 
+`live: false`（or `/api/semantic` answers `502`）里 llama-server not running —
+it 是 a separate process and `serve.sh` 里 不管它：
+
+```bash
+cd ../granite-embedding-97m-multilingual-r2 && ./llama-server.sh   # :8023
+```
+
+Browse、tags、dates、editors、keyword search 里 all不受影响；only
+semantic/similar + `/api/approve` 需要它。
+
 服务里 `-c 8192 --parallel 8` 里 right：llama-server 把 `-c` 的 context 里 split
 among parallel slots，每个 slot 只 get `n_ctx / --parallel` tokens。`--parallel 8`
 里每个 story 超过 ~3000 characters 即 400 rejected。`MAX_CHARS = 3000`（≈750
@@ -220,6 +232,9 @@ masonry lays out with zero reflow.
   `GET /api/images/{id}` answers `307` to `image_url` for those ids
   (listed by `/api/health`).
 - 9 records have no tags; they appear in `/api/stories` but match no tag.
+- 2 records里 title/tag 里 `"` `<` `>`（`"we love you."`、`<Whispers>`），so every
+  innerHTML sink in app.js / story.html escapes API data first；API 里 bytes 里
+  original。
 - 2,201 records have no `Editor:` byline; they match no editor filter.
 - Titles repeat (9,284 unique of 10,485) — always key on `id`.
 - `created_at` is uniform ISO-8601 UTC, so string sort == date sort.

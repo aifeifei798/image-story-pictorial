@@ -45,7 +45,9 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
 Startup loads the JSON once (~0.5 s, ~85 MB steady RSS, ~520 MB peak during
 parse). Images are never preloaded — each is streamed with `sendfile`.
 Without `downloaded_images/`, image requests `307`-redirect to the remote
-`image_url`, so the site still works.
+`image_url`, so the site still works — but only for https hosts listed in
+`IMAGE_REMOTE_HOSTS` (default `feimatrix.com`), so the redirect can't be aimed
+at an arbitrary address.
 
 ## Deploy on a small (1 GB) box
 
@@ -58,8 +60,10 @@ The site runs on a 1 GB VPS ("chicken") with these rules:
   restarts on crash, journald instead of a growing serve.log). serve.sh stays
   for local dev.
 - **Caddy in front**: `deploy/Caddyfile` — TLS + HSTS terminate at the proxy,
-  uvicorn stays plain HTTP on 127.0.0.1:8000. Caddy also sets `X-Forwarded-For`
-  for the app's rate limiter (15 requests / 20 s per IP on search/semantic/similar/upload).
+  uvicorn stays plain HTTP on 127.0.0.1:8000. Caddy **overwrites**
+  `X-Forwarded-For` with the real peer, which is what the app's rate limiter
+  reads (15 requests / 20 s per IP on search/semantic/similar/upload); the
+  default append behaviour would let a client spoof the first hop.
 - **backup cron**: `deploy/backup.sh` snapshots the JSON + vectors (keep 5) —
   one corrupt write means all 10k records.
 - **embedding service**: Granite-97M llama-server needs ~300-500 MB — on a 1 GB
@@ -218,6 +222,16 @@ longer matches, `/api/semantic` and `/api/similar` answer `503`. The
 `http://localhost:8023`). The `embedding` section of `/api/health` reports
 `indexed/total/ready/live`.
 
+`live: false` (or a `502` from `/api/semantic`) means the llama-server is not
+running — it is a separate process and `serve.sh` does not manage it:
+
+```bash
+cd ../granite-embedding-97m-multilingual-r2 && ./llama-server.sh   # :8023
+```
+
+Browse, tags, dates, editors and keyword search keep working either way; only
+semantic/similar and `/api/approve` need the service.
+
 The slot budget is `n_ctx / --parallel` tokens: with the shipped `-c 8192
 --parallel 8` that is 1024 tokens, which is why `MAX_CHARS = 3000` (≈750
 tokens). 51 of 10485 stories are longer (max 5687 characters / 1074 tokens)
@@ -235,6 +249,9 @@ masonry lays out with zero reflow.
   `GET /api/images/{id}` answers `307` to `image_url` for those ids
   (listed by `/api/health`).
 - 9 records have no tags; they appear in `/api/stories` but match no tag.
+- 2 records carry quotes/angle brackets inside a title or tag
+  (`"we love you."`, `<Whispers>`), so every template that interpolates API
+  data HTML-escapes it first; the API keeps the original bytes.
 - 2,201 records have no `Editor:` byline; they match no editor filter.
 - Titles repeat (9,284 unique of 10,485) — always key on `id`.
 - `created_at` is uniform ISO-8601 UTC, so string sort == date sort.
