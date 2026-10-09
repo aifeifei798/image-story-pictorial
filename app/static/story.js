@@ -1,6 +1,9 @@
 /* Detail page: pulls one record from /api/stories/{id} and lays it out. */
 document.addEventListener("DOMContentLoaded", function () {
   applyStatic();
+  /* ← 返回: wired here, not with an inline onclick attribute — the CSP is
+     script-src 'self' (no 'unsafe-inline'), so an HTML onclick is blocked. */
+  document.getElementById("back-btn").onclick = function () { history.back(); };
   const stage = document.getElementById("stage");
   const id = new URLSearchParams(location.search).get("id");
   if (!id) { stage.innerHTML = "<p class='text-amber-200 text-sm'>" + T("err_noid") + "</p>"; return; }

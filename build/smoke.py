@@ -400,6 +400,17 @@ def run_checks() -> None:
     check("raw view exposes it for the escaper", code == 200)
     post(f"/api/reject/{sid3}", headers={"X-Upload-Token": TOKEN})
 
+    section("no inline event handlers")
+    # script-src is 'self' without 'unsafe-inline', so an HTML onclick= is
+    # dead code in the browser. The back button shipped that way once and
+    # silently did nothing.
+    for path in ("/", "/story"):
+        code, body, _ = get(path)
+        import re as _re
+        hits = _re.findall(rb"\son[a-z]+\s*=", body)
+        check(f"no inline handlers in {path}", code == 200 and not hits,
+              f"{len(hits)} found")
+
     section("crawler")
     code, robots, _ = get("/robots.txt")
     check("robots.txt", code == 200 and b"Sitemap: https://example.invalid/sitemap.xml" in robots, f"code={code}")

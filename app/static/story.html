@@ -7,7 +7,7 @@
 <title data-i18n="doc_title">story · my_rag_stories</title>
 <link rel="stylesheet" href="/static/tailwind.css?v=8">
 <script src="/static/lang.js?v=3" defer></script>
-<script src="/static/story.js?v=2" defer></script>
+<script src="/static/story.js?v=3" defer></script>
 <style>
   /* Only the bits Tailwind cannot express: grain, scrollbar, drop cap. */
   @keyframes shimmer { 0% { background-position: -120% 0 } 100% { background-position: 220% 0 } }
@@ -47,7 +47,7 @@
   </a>
   <nav class="ml-auto flex flex-wrap gap-2 text-sm text-slate-400">
     <button data-lang-toggle class="cursor-pointer rounded-lg px-3 py-1.5 border-0 bg-transparent text-slate-400 transition duration-200 hover:text-amber-200 hover:bg-white/6 focus:ring-1 focus:ring-amber-300/60">中文</button>
-    <button class="cursor-pointer rounded-lg px-3 py-1.5 border-0 bg-transparent text-slate-400 transition duration-200 hover:text-amber-200 hover:bg-white/6 focus:ring-1 focus:ring-amber-300/60" onclick="history.back()" data-i18n="back">← 返回</button>
+    <button class="cursor-pointer rounded-lg px-3 py-1.5 border-0 bg-transparent text-slate-400 transition duration-200 hover:text-amber-200 hover:bg-white/6 focus:ring-1 focus:ring-amber-300/60" id="back-btn" data-i18n="back">← 返回</button>
   </nav>
 </header>
 
