@@ -13,5 +13,8 @@ embeddings.ids.json
 # dataset images (1.5 GB, stay local — app falls back to remote image_url)
 downloaded_images/
 
+# grid thumbnails (350 MB, regenerable via build/make_thumbs.py)
+downloaded_thumbs/
+
 # snapshots written by deploy/backup.sh
 .backups/

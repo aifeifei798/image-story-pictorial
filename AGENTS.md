@@ -60,6 +60,28 @@ No git repo, no CI, no tests. README.md is accurate — trust it, keep it in syn
   `story.html`'s inline script escape every interpolation. Adding a new
   `innerHTML` sink for API content needs the same treatment — and bump the
   `?v=` in the HTML after touching `app.js`.
+- Static UI: every `<script>` is an external file now (story.html's inline
+  script moved to `app/static/story.js`), which is what lets `script-src` drop
+  `'unsafe-inline'`. Adding an inline handler anywhere re-enables that XSS
+  class. `story.html` is also read by `/story?id=` to inject per-record
+  crawler metadata (`/api/images` now takes `?thumb=1` for the 480px grid
+  copy — `?v=` in the HTML must be bumped after touching app.js).
+- Grid thumbnails: `build/make_thumbs.py` writes `downloaded_thumbs/{id}.webp`
+  (480px, ImageMagick/cwebp, ~33 KB avg vs ~146 KB) and `/api/images/{id}?thumb=1`
+  serves them with an original-file fallback, so a half-built dir only costs
+  bytes. `card()` requests `?thumb=1`; hero/lightbox/slideshow keep the original.
+- `build/smoke.py` is the regression harness (no CI): copies the dataset to
+  /tmp, boots uvicorn on a spare port, drives every route incl. moderation,
+  auth, escaping, crawler tags, matrix integrity and the rate limiter, and
+  exits non-zero on the first failure. Run it after any backend change —
+  78 checks, ~40 s. `--keep` leaves the sandbox + server log for post-mortem.
+- `deploy/backup.timer` + `.service` schedule `deploy/backup.sh` daily
+  (`OnCalendar=daily`, `RandomizedDelaySec=30m`, `Persistent=true`); the unit
+  is `Type=oneshot` + `Nice=10`/idle I/O. Install both, not just the script.
+- `build/fetch_missing.py` downloads the records that have no local .webp, so
+  `/api/images/{id}` stops 307-ing to the remote host (3 were fixed; health's
+  `missing_local_images` tracks stragglers).
+
 - `MAX_CHARS = 3000` (≈750 tokens — fits the 1024-token slot of llama-server
   `-c 8192 --parallel 8`). Changing it invalidates the old matrix — re-run
   `build_embeddings.py` after any `record_text`/MAX_CHARS change. Slot math:

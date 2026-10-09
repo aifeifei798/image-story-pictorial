@@ -49,6 +49,27 @@ Without `downloaded_images/`, image requests `307`-redirect to the remote
 `IMAGE_REMOTE_HOSTS` (default `feimatrix.com`), so the redirect can't be aimed
 at an arbitrary address.
 
+Optional generated assets (both additive — skip either and the site still
+works, it just costs bytes):
+
+```bash
+# 480px grid thumbnails: a 25-card page drops from ~3.6 MB to ~0.4 MB
+.venv/bin/python build/make_thumbs.py            # ImageMagick or cwebp
+# fetch the 3 records that have no local image (kills the 307 hop)
+.venv/bin/python build/fetch_missing.py
+./serve.sh restart
+```
+
+Regression harness — boots a throwaway copy of the site on a spare port and
+drives every route (headers, filters, search, semantic, moderation
+upload→approve→reject, auth, escaping, crawler tags, matrix integrity, rate
+limit). No CI needed: run it after any backend change, it exits non-zero on the
+first failure and prints `N passed, 0 failed`:
+
+```bash
+.venv/bin/python build/smoke.py [-v] [--keep]
+```
+
 ## Deploy on a small (1 GB) box
 
 The site runs on a 1 GB VPS ("chicken") with these rules:
@@ -64,8 +85,19 @@ The site runs on a 1 GB VPS ("chicken") with these rules:
   `X-Forwarded-For` with the real peer, which is what the app's rate limiter
   reads (15 requests / 20 s per IP on search/semantic/similar/upload); the
   default append behaviour would let a client spoof the first hop.
-- **backup cron**: `deploy/backup.sh` snapshots the JSON + vectors (keep 5) —
-  one corrupt write means all 10k records.
+- **backup timer**: `deploy/backup.sh` snapshots the JSON + vectors (keep 5) —
+  one corrupt write means all 10k records. Schedule it with the bundled unit:
+  ```bash
+  sudo cp deploy/backup.service deploy/backup.timer /etc/systemd/system/
+  sudo systemctl enable --now image-story-backup.timer
+  systemctl list-timers image-story-backup.timer   # next fire time
+  ```
+  It runs `Type=oneshot` at `Nice=10`/idle I/O, so it never competes with the
+  app for the box's one core.
+- **thumbnails are cheap to rebuild**: `downloaded_thumbs/` is regenerable
+  (`build/make_thumbs.py`) and absent-by-default — the API falls back to the
+  original. Build it once after deploy and the grid serves 480px copies;
+  the detail page, lightbox and slideshow keep using the original file.
 - **embedding service**: Granite-97M llama-server needs ~300-500 MB — on a 1 GB
   box it fits only with swap and a small context (`-c 512 -t 1`), and semantic
   queries will be slow. Alternative: keep the chicken browse-only (semantic
@@ -77,6 +109,12 @@ The site runs on a 1 GB VPS ("chicken") with these rules:
   ~300 MB.
 
 ## Web UI
+
+Every page renders in the browser from the same JSON API. `/story?id=<id>`
+additionally ships crawler metadata (`<title>`, description, `og:*`,
+canonical, sitemap `lastmod`) so link unfurlers and search engines see
+something useful; `SITE_URL` sets the public origin for those absolute URLs
+(and enables `/sitemap.xml`).
 
 Open `http://localhost:8000/` — the browser fetches the same JSON API and paints
 it into a Tailwind-classed DOM (dark gold-on-black magazine theme, CSS
@@ -138,7 +176,7 @@ or `tailwind.css`, bump the `?v=N` query on the `<link>`/`<script>` refs.
 | `GET /api/stories?page=1&page_size=20&order=new\|old` | metadata list, `story_text` omitted |
 | `GET /api/stories/{id}` | full record incl. `story_text`, `editor`, prev/next ids |
 | `GET /api/stories/{id}/raw` | record verbatim from the JSON file |
-| `GET /api/images/{id}` | `image/webp` bytes, `Cache-Control: immutable` |
+| `GET /api/images/{id}` | `image/webp` bytes, `Cache-Control: immutable`; `?thumb=1` prefers the 480px grid copy (original when absent) |
 | `GET /api/tags?page=&page_size=` | all tags by count desc |
 | `GET /api/tags/{tag}?page=` | URL-encode spaces (`urban%20romance`), case-insensitive |
 | `GET /api/dates/{date}?page=` | one day (`2026-02-07`), newest first |
@@ -188,8 +226,11 @@ app/__init__.py   package marker
 app/dataset.py    one-shot load + indices (BY_ID, TAG_INDEX, DATE_INDEX, EDITOR_INDEX, ORDER_NEW/POS, SEARCH, _webp_size)
 app/embeddings.py llama-server client + embeddings.f32 matrix + cosine rank
 app/main.py       routes
-app/static/       index.html · story.html · app.js · lang.js · tailwind.css (generated)
+app/static/       index.html · story.html · app.js · lang.js · story.js · tailwind.css (generated)
 build_embeddings.py  embed all records -> embeddings.f32 + embeddings.ids.json
+build/make_thumbs.py  480px grid thumbnails -> downloaded_thumbs/ (optional)
+build/fetch_missing.py  download the records that have no local image
+build/smoke.py      end-to-end regression harness (throwaway server, spare port)
 embeddings.f32 / .ids.json  precomputed (N, 384) float32 matrix + row ids (gitignored, rebuild locally)
 serve.sh          start/stop/restart/status/logs/health/open
 .run/             serve.pid · serve.log (created by serve.sh)
@@ -245,9 +286,10 @@ masonry lays out with zero reflow.
 
 ## Known data quirks (handled)
 
-- 3 records store a remote URL in `local_image_path` instead of a path.
-  `GET /api/images/{id}` answers `307` to `image_url` for those ids
-  (listed by `/api/health`).
+- 3 records store a remote URL in `local_image_path` instead of a path, so
+  `GET /api/images/{id}` used to answer `307` to that host. They were fetched
+  locally by `build/fetch_missing.py` (health now reports
+  `missing_local_images: 0`); the 307 fallback stays for future records.
 - 9 records have no tags; they appear in `/api/stories` but match no tag.
 - 2 records carry quotes/angle brackets inside a title or tag
   (`"we love you."`, `<Whispers>`), so every template that interpolates API

@@ -18,6 +18,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parents[1]
 DATA_FILE = BASE_DIR / "my_rag_stories.json"
 IMAGE_DIR = BASE_DIR / "downloaded_images"
+THUMB_DIR = IMAGE_DIR.parent / "downloaded_thumbs"  # built by build/make_thumbs.py
 LOCK_FILE = BASE_DIR / ".run" / "dataset.lock"
 
 # ---------------------------------------------------------------------------

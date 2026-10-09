@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import secrets
 import threading
 import time
@@ -12,7 +13,7 @@ from collections import deque
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, Path, Query, Request, UploadFile
-from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 
 from . import embeddings as EMB
 from .dataset import (
@@ -30,6 +31,7 @@ from .dataset import (
     SORTED_NEW,
     SORTED_OLD,
     STORIES,
+    THUMB_DIR,
     TAG_DISPLAY,
     TAG_INDEX,
     persist_raw,
@@ -50,16 +52,23 @@ if not UPLOAD_TOKEN:
 
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
+# Public origin, used for canonical URLs + OG tags. Set it in the environment
+# (the deploy kit does) or the request's own base URL is used instead.
+SITE_URL = os.environ.get("SITE_URL", "").rstrip("/")
+
 # ---------------------------------------------------------------------------
 # Security headers (TLS/HSTS belong to the reverse proxy, see deploy/Caddyfile)
 # ---------------------------------------------------------------------------
 
+# script-src has no 'unsafe-inline' on purpose: every script is an external
+# file, so an injected inline handler can no longer run. style-src keeps
+# 'unsafe-inline' because the HTML still carries a small <style> block.
 SEC_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "SAMEORIGIN",
     "Referrer-Policy": "same-origin",
     "Content-Security-Policy": (
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "default-src 'self'; script-src 'self'; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: https://feimatrix.com; "
         "connect-src 'self'; base-src 'none'; form-action 'self'"
@@ -117,6 +126,57 @@ def _require_upload_token(x_upload_token: str | None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Crawler metadata. The pages paint from the API in the browser, but a link
+# shared anywhere else shows whatever the raw HTML says — so /story?id= ships
+# a real <title>, description, canonical and OG tags for that record.
+# ---------------------------------------------------------------------------
+
+_STORY_HTML: tuple[float, str] | None = None
+
+
+def _story_html() -> str:
+    """story.html contents, cached by mtime (edits need no code change)."""
+    global _STORY_HTML
+    path = STATIC_DIR / "story.html"
+    mtime = path.stat().st_mtime
+    if _STORY_HTML is None or _STORY_HTML[0] != mtime:
+        _STORY_HTML = (mtime, path.read_text(encoding="utf-8"))
+    return _STORY_HTML[1]
+
+
+def _attr(text: str) -> str:
+    """Escape a value for an HTML text or double-quoted attribute context."""
+    return (
+        text.replace("&", "&amp;")
+        .replace('"', "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def _lede(rec: dict) -> str:
+    """First ~180 characters of the story, byline and blank lines removed."""
+    text = re.sub(r"(?im)^\s*editor\s*:.*$", "", rec.get("story_text") or "")
+    return re.sub(r"\s+", " ", text).strip()[:180]
+
+
+def _inject_meta(html: str, title: str, desc: str, url: str, image: str) -> str:
+    """Swap story.html's <title> for the record's own <head> metadata."""
+    head = (
+        f"<title>{_attr(title)}</title>"
+        f'<meta name="description" content="{_attr(desc)}">'
+        f'<link rel="canonical" href="{_attr(url)}">'
+        f'<meta property="og:type" content="article">'
+        f'<meta property="og:title" content="{_attr(title)}">'
+        f'<meta property="og:description" content="{_attr(desc)}">'
+        f'<meta property="og:image" content="{_attr(image)}">'
+        f'<meta property="og:url" content="{_attr(url)}">'
+        f'<meta name="twitter:card" content="summary_large_image">'
+    )
+    return re.sub(r"<title[^>]*>.*?</title>", head, html, count=1, flags=re.S)
+
+
+# ---------------------------------------------------------------------------
 # The Tailwind UI
 # ---------------------------------------------------------------------------
 
@@ -131,12 +191,31 @@ def index():
 
 
 @app.get("/story", include_in_schema=False)
-def story():
-    return FileResponse(
-        STATIC_DIR / "story.html",
-        media_type="text/html; charset=utf-8",
-        headers=HTML,
+def story(request: Request):
+    """Record view. With a ``?id=`` of a known record the HTML carries that
+    record's crawler metadata; otherwise the plain (client-rendered) shell.
+
+    The browser still paints from the API — the difference only shows up for
+    anything that reads the raw HTML: crawlers, link unfurlers, `curl`.
+    """
+    sid = request.query_params.get("id") or ""
+    rec = BY_ID.get(sid)
+    if rec is None:
+        return FileResponse(
+            STATIC_DIR / "story.html",
+            media_type="text/html; charset=utf-8",
+            headers=HTML,
+        )
+    base = (SITE_URL or str(request.base_url)).rstrip("/")
+    title = f"{rec.get('title') or sid} · my_rag_stories"
+    html = _inject_meta(
+        _story_html(),
+        title,
+        _lede(rec),
+        f"{base}/story?id={sid}",
+        f"{base}/api/images/{sid}",
     )
+    return HTMLResponse(html, headers=HTML)
 
 
 @app.get("/static/{name}")
@@ -239,8 +318,20 @@ def _remote_image_allowed(url: str) -> bool:
     return any(host == h or host.endswith("." + h) for h in REMOTE_IMAGE_HOSTS)
 
 
+IMAGE_HEADERS = {
+    "Cache-Control": "public, max-age=31536000, immutable",
+    **SEC_HEADERS,
+}
+
+
 @app.get("/api/images/{story_id}")
-def get_image(story_id: str):
+def get_image(story_id: str, thumb: int = Query(0)):
+    """Stream the record's webp; ``?thumb=1`` prefers the 480px grid copy.
+
+    A missing thumbnail silently falls back to the original — only the grid
+    asks for one, so a half-built downloaded_thumbs/ costs bandwidth, not
+    correctness.
+    """
     r = BY_ID.get(story_id)
     if r is None:
         raise HTTPException(status_code=404, detail=f"unknown story id: {story_id}")
@@ -250,11 +341,12 @@ def get_image(story_id: str):
         if _remote_image_allowed(remote):
             return RedirectResponse(remote, status_code=307)
         raise HTTPException(status_code=404, detail="no local image, no trusted remote image")
-    return FileResponse(
-        r["_local_image"],
-        media_type="image/webp",
-        headers={"Cache-Control": "public, max-age=31536000, immutable", **SEC_HEADERS},
-    )
+    path = r["_local_image"]
+    if thumb:
+        small = THUMB_DIR / pathlib.Path(path).name
+        if small.is_file():
+            path = str(small)
+    return FileResponse(path, media_type="image/webp", headers=IMAGE_HEADERS)
 
 
 # ---------------------------------------------------------------------------
@@ -608,9 +700,6 @@ def reject_story(
 # Crawler bits (only meaningful once SITE_URL is set by the proxy/deploy)
 # ---------------------------------------------------------------------------
 
-SITE_URL = os.environ.get("SITE_URL", "").rstrip("/")
-
-
 @app.get("/robots.txt", include_in_schema=False)
 def robots() -> PlainTextResponse:
     lines = ["User-Agent: *", "Allow: /"]
@@ -623,8 +712,13 @@ def robots() -> PlainTextResponse:
 def sitemap() -> PlainTextResponse:
     if not SITE_URL:
         raise HTTPException(status_code=404, detail="set SITE_URL to serve a sitemap")
+    # <title> already lives in the head of sitemap body; per URL metadata kept
+    # to loc + lastmod (the day the record was created).
     urls = "".join(
-        f"<url><loc>{SITE_URL}/story?id={r['id']}</loc></url>" for r in SORTED_NEW[:2000]
+        "<url><loc>{}/story?id={}</loc><lastmod>{}</lastmod></url>".format(
+            SITE_URL, r["id"], (r.get("created_at") or "")[:10]
+        )
+        for r in SORTED_NEW
     )
     body = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'

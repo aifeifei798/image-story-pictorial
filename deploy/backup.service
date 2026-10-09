@@ -1,0 +1,19 @@
+# systemd service that runs deploy/backup.sh (the daily snapshot). Install:
+#   sudo cp deploy/backup.service deploy/backup.timer /etc/systemd/system/
+#   sudo systemctl enable --now image-story-backup.timer
+#
+# The timer is what schedules it; this unit only holds the command:
+#   systemctl list-timers image-story-backup.timer   # next/last run
+#   sudo systemctl start image-story-backup.service  # run it by hand
+
+[Unit]
+Description=image-story-pictorial snapshot (JSON + vectors)
+# no need to run before the app — snapshots only, the app never reads them
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/image-story-pictorial
+ExecStart=/srv/image-story-pictorial/deploy/backup.sh
+Nice=10
+IOSchedulingClass=idle

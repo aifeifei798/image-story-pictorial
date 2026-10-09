@@ -47,7 +47,27 @@ parse). Images are never preloaded — each is streamed with `sendfile`.
 Without `downloaded_images/`, image requests `307`-redirect to the remote
 `image_url`, so the site still works — but only for https hosts里
 `IMAGE_REMOTE_HOSTS`（default `feimatrix.com`），so the redirect can't be
-aimed at an arbitrary address.
+aimed at an arbitrary address。
+
+Optional 生成物（都 optional，skip 里 site still works，only bytes 里 cost）:
+
+```bash
+# 480px 网格缩略图：一页 25 张 from ~3.6 MB → ~0.4 MB
+.venv/bin/python build/make_thumbs.py            # ImageMagick 或 cwebp
+# 抓回 3 张 missing local image（kill the 307 hop）
+.venv/bin/python build/fetch_missing.py
+./serve.sh restart
+```
+
+回归 harness里（boot a throwaway copy on a spare port，drive every route：
+headers、filters、search、semantic、moderation upload→approve→reject、auth、
+escaping、crawler tags、matrix integrity、rate limit）。No CI 里 need：any
+backend change 后 run it，first failure 即 non-zero exit，PASS all 里
+`N passed, 0 failed`:
+
+```bash
+.venv/bin/python build/smoke.py [-v] [--keep]
+```
 
 ## 部署在 1G 小鸡
 
@@ -57,11 +77,27 @@ aimed at an arbitrary address.
 - **uvicorn 单 worker，永远**：索引全在内存，上传重写单 JSON 文件——多 worker 即数据集 fork + 写 race。
 - **systemd 而非 serve.sh**：`deploy/systemd.service`（RSS 封顶 700M、崩溃自动重启、journald 而非 growing serve.log）。serve.sh 保持 for 本地 dev。
 - **Caddy 前面**：`deploy/Caddyfile` — TLS + HSTS 终结 at 代理，uvicorn 保持 plain HTTP on 127.0.0.1:8000。Caddy 里 `X-Forwarded-For` 里 overwrite with the real peer for 的 app 的 rate limiter（15 req / 20 s per IP on search/semantic/similar/upload）——append 即 first hop spoofable。
-- **backup cron**：`deploy/backup.sh` 快照 JSON + vectors（keep 5）——one corrupt write 即 all 10k records 全灭。
+- **backup timer**：`deploy/backup.sh` 快照 JSON + vectors（keep 5）——one corrupt write 即 all 10k records 全灭。Schedule 里 bundled unit：
+  ```bash
+  sudo cp deploy/backup.service deploy/backup.timer /etc/systemd/system/
+  sudo systemctl enable --now image-story-backup.timer
+  systemctl list-timers image-story-backup.timer   # next fire time
+  ```
+  它里 `Type=oneshot` + `Nice=10`/idle I/O，so 里 never compete with the app for 一 core。
+- **thumbnails 里 cheap to rebuild**：`downloaded_thumbs/` 里 regenerable
+  （`build/make_thumbs.py`）and absent-by-default——API 里 fallback to 原图。
+  Deploy 后 build once，grid 里 480px copies serve；detail page、lightbox、
+  slideshow 里 still 原图。
 - **embedding 服务**：Granite-97M llama-server 需要 ~300-500 MB——在 1G 小鸡里它 only fits with swap + small context (`-c 512 -t 1`)，semantic 查询 will be slow。Alternative: 小鸡 keep browse-only（semantic 503 by design）+ tunnel `EMBED_URL` from 大 box（`ssh -R 8023:localhost:8023 bigbox`）。
 - memory budget: app ~300 MB + Caddy ~50 MB + embedding ~400 MB ≈ 750 MB——tight but survivable with swap；vectors 是 stored as `array('f')` rows (~16 MB) instead of Python float lists (~130 MB) to keep the app under ~300 MB.
 
 ## Web UI
+
+Every page 里 browser 里 renders from 里 same JSON API。`/story?id=<id>`
+additionally 里 crawler metadata（`<title>`、description、`og:*`、canonical、
+sitemap `lastmod`），so link unfurlers and search engines 里 see useful；
+`SITE_URL` 里 sets 里 public origin for those absolute URLs（and enables
+`/sitemap.xml`）。
 
 Open `http://localhost:8000/` — the browser fetches the same JSON API and paints
 it into a Tailwind-classed DOM (dark gold-on-black magazine theme, CSS
@@ -124,7 +160,7 @@ or `tailwind.css`, bump the `?v=N` query on the `<link>`/`<script>` refs.
 | `GET /api/stories?page=1&page_size=20&order=new\|old` | metadata list, `story_text` omitted |
 | `GET /api/stories/{id}` | full record incl. `story_text`, `editor`, prev/next ids |
 | `GET /api/stories/{id}/raw` | record verbatim from the JSON file |
-| `GET /api/images/{id}` | `image/webp` bytes, `Cache-Control: immutable` |
+| `GET /api/images/{id}` | `image/webp` bytes, `Cache-Control: immutable` | | `image/webp` bytes，`Cache-Control: immutable`；`?thumb=1` 里 prefers 480px grid copy（absent 里 original） |
 | `GET /api/tags?page=&page_size=` | all tags by count desc |
 | `GET /api/tags/{tag}?page=` | URL-encode spaces (`urban%20romance`), case-insensitive |
 | `GET /api/dates/{date}?page=` | one day (`2026-02-07`), newest first |
@@ -173,8 +209,11 @@ app/__init__.py   package marker
 app/dataset.py    one-shot load + indices (BY_ID, TAG_INDEX, SEARCH, _webp_size)
 app/embeddings.py llama-server client + embeddings.f32 matrix + cosine rank
 app/main.py       routes
-app/static/       index.html · story.html · app.js · lang.js · tailwind.css (generated)
+app/static/       index.html · story.html · app.js · lang.js · story.js · tailwind.css (generated)
 build_embeddings.py  embed all records -> embeddings.f32 + embeddings.ids.json
+build/make_thumbs.py  480px grid thumbnails -> downloaded_thumbs/ (optional)
+build/fetch_missing.py  下载 missing local image 里 records
+build/smoke.py      end-to-end regression harness (throwaway server, spare port)
 embeddings.f32 / .ids.json  precomputed (N, 384) float32 matrix + row ids
 serve.sh          start/stop/restart/status/logs/health/open
 .run/             serve.pid · serve.log (created by serve.sh)
@@ -228,9 +267,7 @@ masonry lays out with zero reflow.
 
 ## Known data quirks (handled)
 
-- 3 records store a remote URL in `local_image_path` instead of a path.
-  `GET /api/images/{id}` answers `307` to `image_url` for those ids
-  (listed by `/api/health`).
+- 3 records store a remote URL in `local_image_path` instead of a path，so `/api/images/{id}` 里 used to `307`。它们里 locally fetched by `build/fetch_missing.py`（health 里 now `missing_local_images: 0`）；307 fallback 里 still there for future records。
 - 9 records have no tags; they appear in `/api/stories` but match no tag.
 - 2 records里 title/tag 里 `"` `<` `>`（`"we love you."`、`<Whispers>`），so every
   innerHTML sink in app.js / story.html escapes API data first；API 里 bytes 里

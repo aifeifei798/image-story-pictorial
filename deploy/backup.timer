@@ -1,0 +1,21 @@
+# Daily snapshot timer for deploy/backup.service.
+#   sudo cp deploy/backup.service deploy/backup.timer /etc/systemd/system/
+#   sudo systemctl enable --now image-story-backup.timer
+#
+# Persistent=true catches up a run missed while the box was off, and the
+# jitter keeps it off the exact hour. `systemctl list-timers` shows the
+# next fire time; `journalctl -u image-story-backup` shows the output
+# ("backups: N files in .backups/").
+
+[Unit]
+Description=image-story-pictorial daily backup timer
+
+[Timer]
+OnCalendar=daily
+# randomised delay so the box isn't doing backups at exactly 00:00
+RandomizedDelaySec=30m
+Persistent=true
+Unit=image-story-backup.service
+
+[Install]
+WantedBy=timers.target
