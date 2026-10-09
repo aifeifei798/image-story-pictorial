@@ -74,7 +74,11 @@ No git repo, no CI, no tests. README.md is accurate — trust it, keep it in syn
   /tmp, boots uvicorn on a spare port, drives every route incl. moderation,
   auth, escaping, crawler tags, matrix integrity and the rate limiter, and
   exits non-zero on the first failure. Run it after any backend change —
-  78 checks, ~40 s. `--keep` leaves the sandbox + server log for post-mortem.
+  86 checks, ~40 s. `--keep` leaves the sandbox + server log for post-mortem.
+  It pins the **openapi route table**: a handler rewrite once swallowed the
+  neighbouring `/api/random`, which took random mode, the slideshow and the
+  detail page's "Surprise me" button down at once (all three fetch it) — the
+  browser noticed before the tests did, until the inventory check existed.
 - `deploy/backup.timer` + `.service` schedule `deploy/backup.sh` daily
   (`OnCalendar=daily`, `RandomizedDelaySec=30m`, `Persistent=true`); the unit
   is `Type=oneshot` + `Nice=10`/idle I/O. Install both, not just the script.
