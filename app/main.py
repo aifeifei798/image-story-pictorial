@@ -560,6 +560,12 @@ def similar_stories(
     }
 
 
+@app.get("/api/random")
+def get_random(n: int = Query(1, ge=1, le=20)) -> dict:
+    """Up to 20 uniformly random records (used by the random mode + slideshow)."""
+    return {"items": [summarize(r) for r in random_stories(n)]}
+
+
 @app.post("/api/upload", status_code=201)
 async def upload_story(
     request: Request,

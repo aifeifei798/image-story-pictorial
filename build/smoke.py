@@ -262,6 +262,29 @@ def run_checks() -> None:
               and hdr.get("referrer-policy") == "same-origin",
               f"code={code} csp={csp[:70]}")
 
+    section("route inventory")
+    # A handler rewrite once deleted /api/random wholesale, which broke random,
+    # slideshow and "surprise me" at once — and only a browser would notice.
+    code, body, _ = get("/openapi.json")
+    try:
+        spec = json.loads(body)
+    except Exception:
+        spec = {}
+    have = set(spec.get("paths", {}))
+    expect = {
+        "/api/stories", "/api/stories/{story_id}", "/api/stories/{story_id}/raw",
+        "/api/images/{story_id}", "/api/tags", "/api/tags/{tag}", "/api/dates/{day}",
+        "/api/editors", "/api/editors/{editor}", "/api/search", "/api/semantic",
+        "/api/similar/{story_id}", "/api/random", "/api/health", "/api/upload",
+        "/api/pending", "/api/approve/{story_id}", "/api/reject/{story_id}",
+        "/static/{name}",
+    }
+    # /, /story, robots.txt, sitemap.xml are include_in_schema=False and get
+    # their own checks below
+    check("openapi exposes every route", code == 200 and expect <= have,
+          f"missing={sorted(expect - have)} extra={sorted(have - expect)[:4]}")
+    check("no /docs leak (docs_url off)", get("/docs")[0] in (404, 405) and "/docs" not in have)
+
     section("browse")
     code, data = jget("/api/stories?page=1&page_size=5")
     check("browse page 1", code == 200 and len(data.get("items", [])) == 5, f"code={code}")
