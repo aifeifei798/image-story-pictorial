@@ -43,6 +43,8 @@ TOKEN = "smoke-token"
 DIM = 384
 
 PORT = int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv else 0
+PORT_NOW = 0
+SERVER: subprocess.Popen | None = None
 VERBOSE = "-v" in sys.argv
 KEEP = "--keep" in sys.argv
 
@@ -134,14 +136,14 @@ def upload(title="Smoke <b>Test</b>",
 
 
 def main() -> None:
-    global ROOT, BASE_URL, PAYLOAD
+    global ROOT, BASE_URL, PAYLOAD, PORT_NOW
     if not VENV.is_file():
         sys.exit(f"missing {VENV} — create the venv first")
     global SAMPLE
-    port = PORT or free_port()
+    PORT_NOW = PORT or free_port()
 
     ROOT = Path(tempfile.mkdtemp(prefix="smoke-", dir="/tmp"))
-    print(f"sandbox {ROOT}  port {port}")
+    print(f"sandbox {ROOT}  port {PORT_NOW}")
     shutil.copytree(SRC_APP, ROOT / "app")
     shutil.copy2(SRC_JSON, ROOT / "my_rag_stories.json")
     if SRC_EMB.is_file() and SRC_IDS.is_file():
@@ -161,27 +163,21 @@ def main() -> None:
         shutil.copy2(thumb, ROOT / "downloaded_thumbs" / sample[0].name)
 
     env = {**os.environ, "UPLOAD_TOKEN": TOKEN, "SITE_URL": "https://example.invalid"}
-    log = open(ROOT / "server.log", "wb")
-    proc = subprocess.Popen(
-        [str(VENV), "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1",
-         "--port", str(port), "--workers", "1"],
-        cwd=ROOT, env=env, stdout=log, stderr=log,
-    )
-    BASE_URL = f"http://127.0.0.1:{port}"
+    BASE_URL = f"http://127.0.0.1:{PORT_NOW}"
     try:
-        if not wait_up():
+        if not start_server():
             print(f"server never came up — {(ROOT / 'server.log').read_text()[-2000:]}")
             check("server starts", False)
         else:
             check("server starts", True, "uvicorn on a spare port")
             run_checks()
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-        log.close()
+        if SERVER is not None:
+            SERVER.terminate()
+            try:
+                SERVER.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                SERVER.kill()
         if KEEP:
             print(f"\nsandbox kept: {ROOT}  (log: {ROOT / 'server.log'})")
         else:
@@ -211,6 +207,32 @@ def wait_up(timeout: float = 40.0) -> bool:
     return False
 
 
+def bounce() -> bool:
+    """Terminate and relaunch the sandbox uvicorn on the same port."""
+    global SERVER
+    if SERVER is not None:
+        SERVER.terminate()
+        try:
+            SERVER.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            SERVER.kill()
+    return start_server()
+
+
+def start_server() -> bool:
+    global SERVER
+    env = {**os.environ, "UPLOAD_TOKEN": TOKEN, "SITE_URL": "https://example.invalid"}
+    log = open(ROOT / "server.log", "ab")
+    SERVER = subprocess.Popen(
+        [str(VENV), "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1",
+         "--port", str(PORT_NOW), "--workers", "1"],
+        cwd=ROOT, env=env, stdout=log, stderr=log,
+    )
+    ok = wait_up()
+    log.close()
+    return ok
+
+
 def run_checks() -> None:
     # the one image the sandbox has locally, which is also in the matrix
     ids = json.loads((ROOT / "embeddings.ids.json").read_text())
@@ -227,12 +249,14 @@ def run_checks() -> None:
     check("embedding ready", emb.get("ready") is True, str(emb))
     check("embedding live", emb.get("live") is True)
 
+
     section("headers")  # JSON routes carry no HTML headers by design
     for path in ("/", f"/story?id={rid}", "/static/app.js", "/static/story.js",
                  "/static/lang.js", f"/api/images/{rid}"):
         code, _, hdr = get(path)
         csp = hdr.get("content-security-policy", "")
-        ok = code == 200 and "script-src 'self'" in csp and "script-src 'self';" in csp + ";"
+        ok = (code == 200 and "script-src 'self'" in csp and "script-src 'self';" in csp + ";"
+              and "frame-ancestors 'self'" in csp)
         check(f"headers {path}", ok and hdr.get("x-content-type-options") == "nosniff"
               and hdr.get("x-frame-options") == "SAMEORIGIN"
               and hdr.get("referrer-policy") == "same-origin",
@@ -373,10 +397,33 @@ def run_checks() -> None:
           f32.stat().st_size == len(ids_now) * DIM * 4 == hh.get("total") * DIM * 4,
           f"{f32.stat().st_size} vs {len(ids_now) * DIM * 4} total={hh.get('total')}")
 
+    section("stale matrix (row count != dataset size)")
+    # A rebuild that predates an approved upload, or a rejected record still in
+    # the matrix, leaves the row count off by one. Everything must degrade
+    # gracefully: browse keeps working, semantic/similar explain the rebuild.
+    ids_now = json.loads((ROOT / "embeddings.ids.json").read_text())
+    f32 = (ROOT / "embeddings.f32").read_bytes()
+    (ROOT / "embeddings.f32").write_bytes(f32[: len(f32) - DIM * 4])
+    (ROOT / "embeddings.ids.json").write_text(json.dumps(ids_now[:-1]))
+    if not bounce():
+        check("bounce after matrix surgery", False, "server did not come back")
+    else:
+        code, hv = jget("/api/health")
+        check("health still answers", code == 200, f"code={code}")
+        check("embedding reports not ready", (hv.get("embedding") or {}).get("ready") is False,
+              json.dumps(hv.get("embedding")))
+        check("semantic 503s with the rebuild hint",
+              jget("/api/semantic?q=stale")[0] == 503)
+        code, simbad = jget(f"/api/similar/{rid}?n=3")
+        check("similar 503s (not 404) on a known id", code == 503, f"code={code}")
+        _code, _bd = jget("/api/similar/zzzz?n=3")
+        check("similar 404s on an unknown id", _code in (404, 429), f"code={_code}")
+        check("browse still 200 after the surgery", jget("/api/stories?page_size=3")[0] == 200)
+
     section("rate limit (burns the quota — keep it last)")
     codes = [get(f"/api/semantic?q=rl{i}")[0] for i in range(18)]
     check("limiter trips 429", 429 in codes, f"{codes.count(429)}/18 blocked")
-    check("clean window recovers", all(c in (200, 429) for c in codes))
+    check("no unexpected status", all(c in (200, 429, 503) for c in codes), str(sorted(set(codes))))
 
 
 def h_total() -> int:

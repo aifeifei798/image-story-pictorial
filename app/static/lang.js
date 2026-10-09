@@ -37,7 +37,8 @@ const I18N = {
     err_noid: "Missing ?id=", err_unknown: "Unknown id: ", err_load: "Failed: ",
     see_day: "View this day", see_tag: "View tag ",
     sim: "✦ Similar", rand: "🎲 Surprise me", prev: "← Prev", next: "Next →",
-    slide_hint: "click anywhere to stop · ESC"
+    slide_hint: "click anywhere to stop · ESC",
+    skip: "Skip to the gallery"
   },
   zh: {
     doc_title: "my_rag_stories · 影像故事档案",
@@ -65,7 +66,8 @@ const I18N = {
     err_noid: "缺少 ?id= 参数", err_unknown: "未知 id: ", err_load: "加载失败: ",
     see_day: "查看这一天的全部", see_tag: "查看标签 ",
     sim: "✦ 语义相似", rand: "🎲 随机一张", prev: "← 上一张", next: "下一张 →",
-    slide_hint: "点击任意处停止 · ESC"
+    slide_hint: "点击任意处停止 · ESC",
+    skip: "跳到内容"
   }
 };
 

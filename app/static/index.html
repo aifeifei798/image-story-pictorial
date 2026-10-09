@@ -13,8 +13,8 @@
 <title data-i18n="doc_title">my_rag_stories · 影像故事档案</title>
 <link rel="stylesheet" href="/static/tailwind.css?v=8">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23d4af37'/%3E%3C/svg%3E">
-<script src="/static/lang.js?v=2" defer></script>
-<script src="/static/app.js?v=21" defer></script>
+<script src="/static/lang.js?v=3" defer></script>
+<script src="/static/app.js?v=22" defer></script>
 <style>
   /* Only what Tailwind cannot express: grain, keyframes, scrollbar. */
   @keyframes shimmer { 0% { background-position: -120% 0 } 100% { background-position: 220% 0 } }
@@ -24,10 +24,22 @@
   ::selection { background: #d4af37; color: #0b0b10; }
   .sk { background-image: linear-gradient(100deg, transparent 20%, #ffffff12 45%, transparent 70%); background-size: 220% 100%; animation: shimmer 2.4s linear infinite; }
   .drift-a, .drift-b { animation: drift 26s ease-in-out infinite alternate; }
+
+  /* honour prefers-reduced-motion: the ambient drift + shimmer are decoration */
+  @media (prefers-reduced-motion: reduce) {
+    .drift-a, .drift-b, .sk { animation: none; }
+    *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+  }
+  /* keyboard-only skip link */
+  .skip-link { position: absolute; left: -9999px; top: 0; z-index: 200; }
+  .skip-link:focus { left: 1rem; top: 1rem; padding: .5rem .75rem; border-radius: .5rem;
+    background: #0b0b10; color: #fde68a; box-shadow: 0 0 0 1px #ffffff1a; }
 </style>
 </head>
 
 <body class="m-0 min-h-screen bg-[#0b0b10] font-sans text-slate-200 antialiased">
+<a class="skip-link" href="#grid" data-i18n="skip">Skip to the gallery</a>
+<noscript><p style="margin:0;padding:1rem;background:#3f2d0b;color:#fde68a;text-align:center">需要 JavaScript 才能浏览 / This gallery is rendered by JavaScript in the browser · the JSON API works without it: <code>/api/stories</code></p></noscript>
 
 <!-- ── ambient light ─────────────────────────────────────────────── -->
 <div class="pointer-events-none fixed inset-0 -z-30 overflow-hidden bg-[#0b0b10]">

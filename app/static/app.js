@@ -306,7 +306,7 @@ document.getElementById("search-form").addEventListener("submit", (ev) => {
 });
 
 /* ── slideshow: a random story every 3 s ───────────────────────────── */
-let SLIDE = { timer: null, items: [], i: 0 };
+let SLIDE = { timer: null, items: [], i: 0, paused: false };
 
 function slideText(it) {
   const box = document.getElementById("slide-text");
@@ -383,6 +383,18 @@ function startSlide() {
     stopSlide();
   };
 }
+
+/* A hidden tab must not keep the 3 s cadence: it burns CPU in the background
+   and preloads images nobody is looking at. Pause + resume on visibility. */
+document.addEventListener("visibilitychange", function () {
+  if (!SLIDE.timer && !SLIDE.paused) return;
+  if (document.hidden) {
+    if (SLIDE.timer) { clearInterval(SLIDE.timer); SLIDE.timer = null; SLIDE.paused = true; }
+  } else if (SLIDE.paused) {
+    SLIDE.paused = false;
+    SLIDE.timer = setInterval(slideAdvance, 3000);
+  }
+});
 
 function stopSlide() {
   if (SLIDE.timer) clearInterval(SLIDE.timer);

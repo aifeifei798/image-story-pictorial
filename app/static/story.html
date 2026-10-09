@@ -6,8 +6,8 @@
 <meta name="theme-color" content="#0b0b10">
 <title data-i18n="doc_title">story · my_rag_stories</title>
 <link rel="stylesheet" href="/static/tailwind.css?v=8">
-<script src="/static/lang.js?v=2" defer></script>
-<script src="/static/story.js?v=1" defer></script>
+<script src="/static/lang.js?v=3" defer></script>
+<script src="/static/story.js?v=2" defer></script>
 <style>
   /* Only the bits Tailwind cannot express: grain, scrollbar, drop cap. */
   @keyframes shimmer { 0% { background-position: -120% 0 } 100% { background-position: 220% 0 } }
@@ -17,10 +17,22 @@
   ::selection { background: #d4af37; color: #0b0b10; }
   .first-line::first-letter { float: left; font-size: 3.4em; line-height: .8; font-family: ui-serif, Georgia, serif; color: #d4af37; }
   .drift-a, .drift-b { animation: drift 26s ease-in-out infinite alternate; }
+
+  /* honour prefers-reduced-motion: the ambient drift is decoration */
+  @media (prefers-reduced-motion: reduce) {
+    .drift-a, .drift-b { animation: none; }
+    *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+  }
+  /* keyboard-only skip link */
+  .skip-link { position: fixed; left: -9999px; top: 0; z-index: 200; }
+  .skip-link:focus { left: 1rem; top: 1rem; padding: .5rem .75rem; border-radius: .5rem;
+    background: #0b0b10; color: #fde68a; box-shadow: 0 0 0 1px #ffffff1a; }
 </style>
 </head>
 
 <body class="m-0 min-h-screen bg-[#0b0b10] font-sans text-slate-200 antialiased">
+<a class="skip-link" href="#stage" data-i18n="skip">Skip to the story</a>
+<noscript><p style="margin:0;padding:1rem;background:#3f2d0b;color:#fde68a;text-align:center">需要 JavaScript 才能查看 / This record view is rendered by JavaScript · the JSON API works without it: <code>/api/stories/{id}</code></p></noscript>
 
 <div class="pointer-events-none fixed inset-0 -z-30 overflow-hidden bg-[#0b0b10]">
   <div class="drift-a absolute -top-[30%] -left-[15%] h-[80vh] w-[75vw] bg-[radial-gradient(closest-side,#d4af371f,transparent)] blur-3xl"></div>

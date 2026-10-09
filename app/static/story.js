@@ -102,6 +102,15 @@ document.addEventListener("DOMContentLoaded", function () {
       });
     };
     acts.appendChild(rb);
+    /* keyboard paging: ← prev, → next (the buttons stay for pointer users) */
+    const goto = function (id) { if (id) location.href = "/story?id=" + encodeURIComponent(id); };
+    document.addEventListener("keydown", function (ev) {
+      if (ev.target && /^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName)) return;
+      if (ev.key === "ArrowLeft") goto(d.prev);
+      else if (ev.key === "ArrowRight") goto(d.next);
+      else return;
+      ev.preventDefault();
+    });
   }).catch(function (e) {
     stage.innerHTML = "<p class='text-amber-200 text-sm'>" + T("err_load") + e.message + "</p>";
   });

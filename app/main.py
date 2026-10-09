@@ -56,6 +56,7 @@ MAX_IMAGE_BYTES = 20 * 1024 * 1024
 # (the deploy kit does) or the request's own base URL is used instead.
 SITE_URL = os.environ.get("SITE_URL", "").rstrip("/")
 
+
 # ---------------------------------------------------------------------------
 # Security headers (TLS/HSTS belong to the reverse proxy, see deploy/Caddyfile)
 # ---------------------------------------------------------------------------
@@ -71,7 +72,8 @@ SEC_HEADERS = {
         "default-src 'self'; script-src 'self'; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: https://feimatrix.com; "
-        "connect-src 'self'; base-src 'none'; form-action 'self'"
+        "connect-src 'self'; base-src 'none'; form-action 'self'; "
+        "frame-ancestors 'self'"
     ),
 }
 
@@ -117,7 +119,10 @@ def _rate(request: Request) -> None:
         raise HTTPException(status_code=429, detail="too many requests, slow down")
     hist.append(now)
     if len(_rate_hist) > 5000:
-        _rate_hist.clear()
+        # prune empties only: clearing the whole table would hand every live
+        # client a fresh 15-request budget (an easy reset button for abusers)
+        for key in [k for k, v in _rate_hist.items() if not v]:
+            del _rate_hist[key]
 
 
 def _require_upload_token(x_upload_token: str | None) -> None:
@@ -525,14 +530,24 @@ def similar_stories(
     request: Request,
     n: int = Query(8, ge=1, le=20),
 ) -> dict:
-    """Nearest neighbours of one record's stored vector (no server call)."""
+    """Nearest neighbours of a record's stored vector (no embedding call).
+
+    Order matters: an unknown id is a 404 even when the matrix is stale, and a
+    known id on a stale matrix is a 503 that says what to run.
+    """
     _rate(request)
-    _require_vectors()
+    if BY_ID.get(story_id) is None:
+        raise HTTPException(status_code=404, detail=f"unknown story id: {story_id}")
+    _require_vectors()  # 503 when rows != dataset size, hinting the rebuild
     ids = EMB.row_ids()
     try:
         row = ids.index(story_id)
     except ValueError:
-        raise HTTPException(status_code=404, detail=f"unknown story id: {story_id}")
+        # a published record missing from an otherwise complete matrix
+        raise HTTPException(
+            status_code=503,
+            detail=f"{story_id} 不在向量矩阵里 — 重新运行 build_embeddings.py",
+        )
     vec = EMB._VECTORS[row]  # type: ignore[union-attr]
     ranked = [p for p in EMB.rank(vec, n + 1) if p[1] != row][:n]
     return {
@@ -543,24 +558,6 @@ def similar_stories(
             if ids[r] in BY_ID
         ],
     }
-
-
-# ---------------------------------------------------------------------------
-# Random
-# ---------------------------------------------------------------------------
-
-
-@app.get("/api/random")
-def get_random(n: int = Query(1, ge=1, le=20)) -> dict:
-    return {"items": [summarize(r) for r in random_stories(n)]}
-
-
-# ---------------------------------------------------------------------------
-# Upload (API only, no UI). Auth: X-Upload-Token header == $UPLOAD_TOKEN.
-# Uploads land as status=pending: invisible to every public route until
-# approved. Embedding happens at approve time, so a dead embedding service
-# never blocks ingestion.
-# ---------------------------------------------------------------------------
 
 
 @app.post("/api/upload", status_code=201)

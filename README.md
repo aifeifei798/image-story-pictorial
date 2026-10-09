@@ -75,6 +75,9 @@ first failure and prints `N passed, 0 failed`:
 The site runs on a 1 GB VPS ("chicken") with these rules:
 
 - **swap first**: `sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile` and add to `/etc/fstab`. Startup peak is ~520 MB; without swap the box OOM-kills during boot.
+- **prefers-reduced-motion / a11y baseline**: skip link + noscript banner on
+  both pages, `←/→` paging on the record view, and the ambient drift/shimmer
+  animations disabled under `prefers-reduced-motion: reduce`.
 - **one uvicorn worker, always**: all indices are in-memory and uploads rewrite
   one JSON file — multiple workers fork the dataset and race on writes.
 - **systemd, not serve.sh**: `deploy/systemd.service` (capped at 700 MB RSS,
@@ -115,6 +118,11 @@ additionally ships crawler metadata (`<title>`, description, `og:*`,
 canonical, sitemap `lastmod`) so link unfurlers and search engines see
 something useful; `SITE_URL` sets the public origin for those absolute URLs
 (and enables `/sitemap.xml`).
+
+Accessibility and courtesy bits: a keyboard-only **skip link** on both pages, a
+`<noscript>` banner (the JSON API still works without JS), `←/→` paging on the
+story view, and `prefers-reduced-motion` turning the ambient drift/shimmer
+transitions off. The slideshow pauses while the tab is hidden.
 
 Open `http://localhost:8000/` — the browser fetches the same JSON API and paints
 it into a Tailwind-classed DOM (dark gold-on-black magazine theme, CSS
@@ -271,7 +279,9 @@ cd ../granite-embedding-97m-multilingual-r2 && ./llama-server.sh   # :8023
 ```
 
 Browse, tags, dates, editors and keyword search keep working either way; only
-semantic/similar and `/api/approve` need the service.
+semantic/similar and `/api/approve` need the service. `/api/similar` tells the
+two failure modes apart: an unknown id is `404` even with a stale matrix, a
+known id on a stale matrix is `503` naming `build_embeddings.py`.
 
 The slot budget is `n_ctx / --parallel` tokens: with the shipped `-c 8192
 --parallel 8` that is 1024 tokens, which is why `MAX_CHARS = 3000` (≈750

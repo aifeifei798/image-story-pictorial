@@ -22,7 +22,10 @@ RestartSec=3
 # Hard memory cap: on a 1 GB box a runaway process must die + restart rather
 # than swap-thrash the whole machine. Steady RSS ~250-300 MB, startup peak
 # ~520 MB, so 700M leaves headroom while refusing anything pathological.
-MemoryLimit=700M
+# MemoryMax is the cgroup v2 name (MemoryLimit is the deprecated alias kept
+# for older systemd — if you change one, keep the other commented for a while).
+MemoryMax=700M
+# MemoryLimit=700M
 
 # logs go to journald, not an ever-growing serve.log
 StandardOutput=journal

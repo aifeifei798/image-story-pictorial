@@ -251,7 +251,9 @@ cd ../granite-embedding-97m-multilingual-r2 && ./llama-server.sh   # :8023
 ```
 
 Browse、tags、dates、editors、keyword search 里 all不受影响；only
-semantic/similar + `/api/approve` 需要它。
+semantic/similar + `/api/approve` 需要它。`/api/similar` 里 two failure modes 里
+distinguish：unknown id 里 `404`（even 里 stale matrix），known id 里 stale
+matrix 里 `503` naming `build_embeddings.py`。
 
 服务里 `-c 8192 --parallel 8` 里 right：llama-server 把 `-c` 的 context 里 split
 among parallel slots，每个 slot 只 get `n_ctx / --parallel` tokens。`--parallel 8`

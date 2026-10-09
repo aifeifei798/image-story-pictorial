@@ -82,6 +82,24 @@ No git repo, no CI, no tests. README.md is accurate — trust it, keep it in syn
   `/api/images/{id}` stops 307-ing to the remote host (3 were fixed; health's
   `missing_local_images` tracks stragglers).
 
+- `/api/similar/{id}` checks the id **before** the matrix: unknown id → 404
+  even when the matrix is stale, known id on a stale matrix → 503 naming
+  `build_embeddings.py`. `_require_vectors()` is what produces the
+  "row count != dataset size" 503 (browse never depends on it).
+- Rate limiter prunes empty per-IP deques at the 5000-entry ceiling instead of
+  clearing the table — a full clear would hand every live client a fresh
+  15-request budget.
+- CSP carries `frame-ancestors 'self'` next to `X-Frame-Options: SAMEORIGIN`.
+- Frontend affordances added after the review: `←/→` page through
+  prev/next on the story page (scoped so input fields keep their arrows),
+  the slideshow pauses on `visibilitychange` and resumes on return (a hidden
+  tab otherwise keeps the 3 s cadence and preloads images), `skip-link` +
+  `<noscript>` banner on both pages, and `prefers-reduced-motion` kills the
+  ambient drift/shimmer and the transitions. Any CSS/JS change needs the `?v=`
+  bump in index.html/story.html.
+- `deploy/systemd.service` uses `MemoryMax=700M` (cgroup v2 name) with the
+  legacy `MemoryLimit` line kept commented for older systemd.
+
 - `MAX_CHARS = 3000` (≈750 tokens — fits the 1024-token slot of llama-server
   `-c 8192 --parallel 8`). Changing it invalidates the old matrix — re-run
   `build_embeddings.py` after any `record_text`/MAX_CHARS change. Slot math:
