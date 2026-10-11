@@ -4,12 +4,13 @@
 # Caddy terminates HTTPS at 127.0.0.1:8000 (uvicorn stays plain HTTP locally)
 # and overwrites X-Forwarded-For with the real peer, which is all the app's
 # rate limiter needs.
-# Replace example.com with your real domain; a certificate is fetched on the
-# first request. Also export SITE_URL=https://your.domain in the env file so
-# the sitemap route works.
+# Keep SITE_URL in .run/env (seeded from deploy/env.example) pointing at the
+# same origin, or /sitemap.xml 404s and the story pages' og:image stays
+# relative. A certificate is fetched on the first request; put a contact email
+# that is really yours in the tls line.
 
-example.com {
-  tls example@example.com
+feimatrix.com {
+  tls your-name@feimatrix.com
   hsts {
     seconds 31622400
     direct

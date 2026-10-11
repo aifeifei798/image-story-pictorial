@@ -1,6 +1,6 @@
 # image-story-pictorial — FastAPI image-story service
 
-Serves the 10,485 records in `my_rag_stories.json` plus the 10,482 local
+Serves the 10,485 records in `my_rag_stories.json` plus the 10,485 local
 `.webp` files in `downloaded_images/`, and renders them in a bilingual
 (EN default, 中文 toggle) Tailwind CSS magazine-style gallery UI. Keyword +
 tag search plus embedding semantic search (RAG-ready: precomputed vectors,
@@ -22,6 +22,7 @@ uv pip install -r requirements.txt --python .venv   # fastapi, uvicorn
 ./serve.sh logs           # tail -f .run/serve.log (-n N to size the window)
 ./serve.sh health         # pretty-printed /api/health
 ./serve.sh open           # every UI/API URL for the current port
+./serve.sh keep           # watchdog: bring the site back if its pid dies
 ```
 
 Host and port come from the environment or flags, and one service at a time is
@@ -35,6 +36,20 @@ PORT=9000 ./serve.sh start
 `stop` also finds instances that were launched outside the script (by pattern,
 not just from the pidfile), so a stray `uvicorn` on the port cannot block a
 restart.
+
+`keep` is the local equivalent of systemd's `Restart=always`: it watches the
+pidfile and restarts within 10 s when the process disappears (crash, OOM kill,
+a bad deploy), giving up after five failed restarts in a row — that is the
+import-time failure case (corrupt JSON, missing token), where retrying can
+never help. Run it detached if you want it to survive closing the terminal:
+
+```bash
+nohup ./serve.sh keep >>.run/keep.log 2>&1 &   # watcher; the site is nohup'd already
+```
+
+Ctrl-C stops the watcher and leaves the site alone, so use it as a pause, not a
+stop. On the deploy box `deploy/systemd.service` already has `Restart=always` —
+`keep` is only for the local `serve.sh` instance.
 
 Equivalent one-liner without the script:
 
@@ -83,6 +98,9 @@ The site runs on a 1 GB VPS ("chicken") with these rules:
 - **systemd, not serve.sh**: `deploy/systemd.service` (capped at 700 MB RSS,
   restarts on crash, journald instead of a growing serve.log). serve.sh stays
   for local dev.
+- **seed `.run/env`**: copy `deploy/env.example` to `.run/env` so `SITE_URL`
+  matches the Caddy host — without it `/sitemap.xml` 404s, robots.txt has no
+  `Sitemap:` line and every `og:image` unfurl is relative.
 - **Caddy in front**: `deploy/Caddyfile` — TLS + HSTS terminate at the proxy,
   uvicorn stays plain HTTP on 127.0.0.1:8000. Caddy **overwrites**
   `X-Forwarded-For` with the real peer, which is what the app's rate limiter
@@ -119,15 +137,35 @@ canonical, sitemap `lastmod`) so link unfurlers and search engines see
 something useful; `SITE_URL` sets the public origin for those absolute URLs
 (and enables `/sitemap.xml`).
 
+### Site origin (`SITE_URL`)
+
+One switch turns on three things at once: `/sitemap.xml` (without it the route
+404s), the `Sitemap:` line in `robots.txt`, and absolute `canonical`/`og:*`/
+`twitter:*` URLs on every `/story?id=` page. `serve.sh` resolves it as
+exported shell env → `.run/env` → the shipped default
+`https://feimatrix.com`, and records the resolved value in `.run/env` so a
+restart (or a fresh shell) keeps the same origin:
+
+```bash
+cp deploy/env.example .run/env   # SITE_URL, plus optional EMBED_URL / IMAGE_REMOTE_HOSTS
+./serve.sh restart               # start prints the origin it settled on
+./serve.sh status                # and status shows it
+```
+
+`deploy/systemd.service` reads that same path through `EnvironmentFile`, so the
+deploy box needs the same copy — keep it pointing at the origin Caddy serves,
+or the sitemap and the `og:image` unfurls point somewhere else.
+
 Accessibility and courtesy bits: a keyboard-only **skip link** on both pages, a
 `<noscript>` banner (the JSON API still works without JS), `←/→` paging on the
 story view, and `prefers-reduced-motion` turning the ambient drift/shimmer
 transitions off. The slideshow pauses while the tab is hidden.
 
 Open `http://localhost:8000/` — the browser fetches the same JSON API and paints
-it into a Tailwind-classed DOM (dark gold-on-black magazine theme, CSS
-multi-column masonry, sticky glass navbar, masthead + cover story + editor
-wall). No framework, no CDN, works offline. UI strings live in
+it into a Tailwind-classed DOM (dark gold-on-black magazine theme, CSS Grid
+gallery — 1/2/3/4/5 columns by viewport width, cards top-aligned so rows stay
+even, sticky glass navbar, masthead + cover story + editor wall). No framework,
+no CDN, works offline. UI strings live in
 `app/static/lang.js` (English default, `?lang=zh` overrides and persists).
 
 | Route | Serves |
@@ -240,8 +278,9 @@ build/make_thumbs.py  480px grid thumbnails -> downloaded_thumbs/ (optional)
 build/fetch_missing.py  download the records that have no local image
 build/smoke.py      end-to-end regression harness (throwaway server, spare port)
 embeddings.f32 / .ids.json  precomputed (N, 384) float32 matrix + row ids (gitignored, rebuild locally)
-serve.sh          start/stop/restart/status/logs/health/open
-.run/             serve.pid · serve.log (created by serve.sh)
+serve.sh          start/stop/restart/status/logs/health/open/keep
+deploy/           systemd.service · Caddyfile · backup.{sh,service,timer} · env.example
+.run/             serve.pid · serve.log · env · upload_token (mode 600) — created by serve.sh
 tailwind.config.js  build input: content globs = the UI sources
 build/input.css     @import tailwindcss entry
 build/check_classes.py  class-token → compiled-selector assertion
@@ -292,7 +331,7 @@ killed rebuild leaves the previous matrix intact.
 
 `summarize()` reads each `.webp` header (pure Python, no Pillow) and returns
 `image_w` / `image_h`, so the UI can set `width`/`height` on every `<img>` —
-masonry lays out with zero reflow.
+the grid lays out with zero reflow.
 
 ## Known data quirks (handled)
 

@@ -8,26 +8,39 @@
 #   ./serve.sh logs [-n N]        follow the uvicorn log
 #   ./serve.sh health             pretty-printed /api/health
 #   ./serve.sh open               print the URLs the UI answers on
+#   ./serve.sh keep               watchdog: bring the site back if its pid dies
 #
 # Host/port come from the environment (defaults below) or flags:
 #   HOST=0.0.0.0 PORT=9000 ./serve.sh start
 #   ./serve.sh start --host 0.0.0.0 --port 9000
+#
+# SITE_URL (the public origin: canonical URLs, og:image, /sitemap.xml) comes
+# from the environment, from .run/env, or from the default below — see
+# deploy/env.example, the template you copy into .run/env.
 
 set -euo pipefail
 
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"
 
+# Public origin for canonical URLs, og:image and /sitemap.xml (app/main.py
+# reads SITE_URL; empty is what leaves the sitemap 404ing and og:image
+# relative). Precedence: exported shell env > .run/env > this default, and
+# start() persists the resolved value into .run/env so restarts keep it.
+# systemd's EnvironmentFile reads that same file on the deploy box.
+SITE_URL_DEFAULT="https://feimatrix.com"
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUN_DIR="$ROOT/.run"
 PIDFILE="$RUN_DIR/serve.pid"
 LOGFILE="$RUN_DIR/serve.log"
+ENVFILE="$RUN_DIR/env"
 
 UVICORN="$ROOT/.venv/bin/uvicorn"
 APP="app.main:app"
 
 usage() {
-  sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'
   exit 1
 }
 
@@ -92,6 +105,27 @@ wait_up() {
   return 1
 }
 
+env_get() {
+  # env_get KEY — value of KEY in .run/env (last assignment wins), else nothing.
+  # Same KEY=VALUE shape systemd's EnvironmentFile reads.
+  [[ -f "$ENVFILE" ]] || return 0
+  sed -n "s|^$1=||p" "$ENVFILE" 2>/dev/null | tail -n 1
+}
+
+site_url() {
+  # Echo the origin to hand app/main.py: exported env wins, then .run/env,
+  # then the shipped default. Never empty — an empty SITE_URL is what keeps
+  # /sitemap.xml 404, robots.txt without its Sitemap line and og:image
+  # relative.
+  if [[ -n "${SITE_URL:-}" ]]; then
+    printf '%s\n' "$SITE_URL"
+    return
+  fi
+  local saved
+  saved="$(env_get SITE_URL || true)"
+  printf '%s\n' "${saved:-$SITE_URL_DEFAULT}"
+}
+
 # --- commands --------------------------------------------------------------
 start() {
   [[ -x "$UVICORN" ]] || {
@@ -131,6 +165,16 @@ start() {
   fi
   export UPLOAD_TOKEN
 
+  # SITE_URL: resolve (exported env > .run/env > default), record it for the
+  # next restart, and hand it to uvicorn. This is what turns on /sitemap.xml,
+  # the Sitemap line in robots.txt and the absolute canonical/og:* URLs.
+  SITE_URL="$(site_url)"
+  export SITE_URL
+  if ! grep -q '^SITE_URL=' "$ENVFILE" 2>/dev/null; then
+    printf 'SITE_URL=%s\n' "$SITE_URL" >>"$ENVFILE"
+    echo "recorded SITE_URL in $ENVFILE (edit that file to change the origin)"
+  fi
+
   # uvicorn refuses a busy port, so surface the reason instead of a bind error.
   local extra p bound
   for p in $(orphans || true); do
@@ -148,6 +192,7 @@ start() {
   if wait_up; then
     pid="$(running_pid)"
     printf 'started  pid %s  host %s  port %s  log %s\n' "$pid" "$HOST" "$PORT" "$LOGFILE"
+    printf 'site     %s (canonical URLs, og:image, /sitemap.xml)\n' "$SITE_URL"
     printf 'health   %s -> %s\n' "$BASE/api/health" \
       "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/health")"
   else
@@ -210,6 +255,7 @@ status() {
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "http://localhost:$port/api/health" || echo 000)"
   printf 'health http://localhost:%s/api/health -> %s\n' "$port" "$code"
   printf 'ui     http://localhost:%s/ · /story?id=<id>\n' "$port"
+  printf 'site   %s (origin the crawler tags + sitemap use)\n' "$(site_url)"
 }
 
 logs() {
@@ -228,6 +274,35 @@ open() {
   printf 'random   http://localhost:%s/?mode=random\n' "$PORT"
   printf 'story    http://localhost:%s/story?id=<id>\n' "$PORT"
   printf 'api      http://localhost:%s/api/health · docs /docs\n' "$PORT"
+  printf 'public   %s/ · /story?id=<id> · /sitemap.xml (the origin crawler tags use)\n' "$(site_url)"
+}
+
+keep() {
+  # Foreground watchdog. start() launches the site detached (nohup), so this
+  # loop only watches the pidfile's process: a crash, an OOM kill or a bad
+  # deploy brings it back within 10 s. Five failed restarts in a row gives up
+  # instead of spinning forever — that is the import-time failure case (bad
+  # JSON, missing UPLOAD_TOKEN), where retrying can never help.
+  # Ctrl-C stops the watcher and leaves the site alone; to run it detached:
+  #   nohup ./serve.sh keep >>.run/keep.log 2>&1 &
+  local down=0
+  printf 'watching (Ctrl-C stops the watcher, not the site)\n'
+  while :; do
+    if [[ -n "$(running_pid || true)" ]]; then
+      down=0
+      sleep 10
+      continue
+    fi
+    down=$((down + 1))
+    if [[ $down -ge 5 ]]; then
+      printf 'gone 5 restarts in a row — giving up, last log lines:\n'
+      tail -n 15 "$LOGFILE" 2>/dev/null
+      return 1
+    fi
+    printf 'instance gone (attempt %s) — restarting\n' "$down"
+    start || true
+    sleep 5
+  done
 }
 
 case "$cmd" in
@@ -238,6 +313,7 @@ case "$cmd" in
   logs)    logs ;;
   health)  health ;;
   open)    open ;;
+  keep)    keep ;;
   ""|-h|--help|help) usage ;;
   *) echo "unknown command: $cmd"; usage ;;
 esac

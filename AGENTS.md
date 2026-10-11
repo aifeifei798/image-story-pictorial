@@ -1,11 +1,26 @@
 # AGENTS.md — my_rag_stories website
 
 FastAPI gallery over `my_rag_stories.json` (10,485 records) + `downloaded_images/`.
-No git repo, no CI, no tests. README.md is accurate — trust it, keep it in sync.
+Git repo: `master` → https://github.com/aifeifei798/image-story-pictorial (public,
+push over https). No CI, no unit tests — `build/smoke.py` is the regression
+harness. README.md is accurate — trust it, keep it in sync.
 
 ## Run
 
-- `./serve.sh restart` (also `start|stop|status|logs|health`). One instance at a time.
+- `./serve.sh restart` (also `start|stop|status|logs|health|open|keep`). One
+  instance at a time. `keep` is a foreground watchdog that restarts the site
+  within 10 s when the tracked pid dies (crash/OOM/bad deploy) and gives up
+  after 5 straight failures — the local instance has no supervisor otherwise,
+  and it has been found stopped after a clean shutdown. On the deploy box
+  systemd's `Restart=always` already covers this.
+- `SITE_URL` (public origin: `/sitemap.xml`, robots.txt's `Sitemap:` line,
+  absolute canonical/og:* on `/story?id=`) resolves as exported shell env →
+  `.run/env` → the default `https://feimatrix.com` in `serve.sh`, and `start`
+  persists the resolved value into `.run/env`. Seed that file from the
+  committed `deploy/env.example`; `deploy/systemd.service` reads the same path
+  as a second `EnvironmentFile`. `deploy/Caddyfile` now names `feimatrix.com`
+  — keep the Caddy host and `SITE_URL` in sync, or the sitemap and the
+  unfurls point at a different origin.
 - Backend changes (anything under `app/*.py`) need a restart. Static files
   (`app/static/*`) are served per-request — no restart needed.
 - Deps: `uv pip install -r requirements.txt --python .venv`. The venv has no
@@ -92,7 +107,11 @@ No git repo, no CI, no tests. README.md is accurate — trust it, keep it in syn
   "row count != dataset size" 503 (browse never depends on it).
 - Rate limiter prunes empty per-IP deques at the 5000-entry ceiling instead of
   clearing the table — a full clear would hand every live client a fresh
-  15-request budget.
+  15-request budget. Its scope is deliberate: only `search|semantic|similar|upload`
+  are capped (they cost substring scans or embedding work); browse/tags/dates/
+  editors/images/random stay unlimited on purpose. It reads `X-Forwarded-For`,
+  which Caddy overwrites with the real peer — a client that bypasses Caddy
+  straight to `:8000` can spoof that first hop.
 - CSP carries `frame-ancestors 'self'` next to `X-Frame-Options: SAMEORIGIN`.
 - Frontend affordances added after the review: `←/→` page through
   prev/next on the story page (scoped so input fields keep their arrows),
