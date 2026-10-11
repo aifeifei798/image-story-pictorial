@@ -139,14 +139,27 @@ async function paint(page, append) {
     const res = await fetch(endpoint(page));
     data = await res.json();
     if (!res.ok) {
+      // detail is only a string on our own HTTPExceptions; FastAPI's 422 body
+      // carries a list, which would stringify as "[object Object]"
+      const d4 = data && typeof data.detail === "string" ? data.detail : null;
       const detail = res.status === 404
-        ? "“" + esc(data && data.detail ? data.detail : (S.tag || S.q)) + "” " + T("err_noresult")
+        ? "“" + esc(d4 || S.tag || S.q) + "” " + T("err_noresult")
+        : res.status === 422
+        ? "“" + esc(S.day || S.tag || S.editor || S.q) + "” " + T("err_noresult")
         : T("err_api") + " " + res.status;
       head.innerHTML = '<p class="text-amber-200 text-sm">' + detail + "</p>";
       return;
     }
   } catch (err) {
     add(head, el("p", "text-amber-200 text-sm", T("err_fail") + err.message));
+    return;
+  }
+
+  // a deep link past the end (?page=99999, or a tag that shrank since it was
+  // bookmarked) would paint a blank grid — clamp to the last real page instead
+  const realPages = data.pages || 1;
+  if (page > 1 && page > realPages && !(data.items || []).length) {
+    paint(realPages, append);
     return;
   }
 
@@ -411,6 +424,24 @@ function stopSlide() {
 document.addEventListener("keydown", function (ev) {
   if (ev.key === "Escape" && SLIDE.timer) stopSlide();
 });
+
+/* the EN/中文 toggle reloads the page (localStorage alone can't repaint the
+   masthead), so re-state the current view in the URL — otherwise switching
+   language drops you back to browse page 1 and clears the filter. */
+viewQ = function (u) {
+  ["q", "semantic", "tag", "date", "editor", "similar", "mode", "order", "page"]
+    .forEach((k) => u.searchParams.delete(k));
+  const set = (k, v) => { if (v != null && v !== "") u.searchParams.set(k, v); };
+  if (S.mode === "search") set("q", S.q);
+  else if (S.mode === "semantic") { set("q", S.q); u.searchParams.set("semantic", "1"); }
+  else if (S.mode === "tag") set("tag", S.tag);
+  else if (S.mode === "date") set("date", S.day);
+  else if (S.mode === "editor") set("editor", S.editor);
+  else if (S.mode === "similar") set("similar", S.sim);
+  else if (S.mode === "tags" || S.mode === "editors" || S.mode === "random") set("mode", S.mode);
+  if (S.order !== "new") set("order", S.order);
+  if (S.page > 1) set("page", S.page);
+};
 
 /* boot from the URL */
 (function () {

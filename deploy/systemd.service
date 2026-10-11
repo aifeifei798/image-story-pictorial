@@ -6,6 +6,9 @@
 # and .venv was rebuilt there (uv pip install -r requirements.txt --python .venv).
 # UPLOAD_TOKEN comes from .run/upload_token — the same file serve.sh maintains,
 # written as KEY=VALUE so EnvironmentFile can read it.
+# SITE_URL is what turns on the crawler bits: without it /sitemap.xml 404s,
+# robots.txt omits the Sitemap line, and the story pages' og:image stays
+# relative. Add it to that env file (or the Environment= line below).
 
 [Unit]
 Description=image-story-pictorial gallery (uvicorn, single worker on purpose)

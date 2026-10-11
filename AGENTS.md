@@ -128,4 +128,24 @@ No git repo, no CI, no tests. README.md is accurate — trust it, keep it in syn
 - i18n: all user-facing strings go through `app/static/lang.js` (`T(key)`,
   `data-i18n` / `data-i18n-html` / `data-i18n-ph` attrs, `mastNo`/`mastSub`
   helpers). Default `en`, `?lang=` overrides + persists to localStorage.
-  `lang.js` must load before `app.js` / the story inline script.
+  `lang.js` must load before `app.js` / the story inline script. Keep the
+  `zh:` dict pure Chinese — `m_all_new` shipped as "全部 · newest first" once.
+  Every `data-i18n*` key and every `T("…")` literal must exist in BOTH dicts
+  (`T()` falls back to en, then prints the raw key).
+- The EN/中文 toggle reloads the page (localStorage alone can't repaint the
+  masthead), and the mode/filter lives in the URL only at boot — so `lang.js`
+  declares `var viewQ = null` and `setLang` calls it after setting `?lang=`;
+  app.js installs `viewQ` to re-state the current mode/filter/page and to
+  DELETE the stale ones first (without the delete, ✕ Clear + toggle bounces
+  back into the old filter). Null on the story page, which keeps `?id=`.
+- `paint()` clamps a deep link past the end (`?page=99999` painted a blank
+  grid; it now repaints at `data.pages`) — the clamp must run before the
+  search→semantic fallback, and `data.pages` is the real count while
+  `S.pages` is capped at `MAX_PAGES` for the "More" button.
+- `res.detail` is a string only on our own HTTPExceptions; FastAPI's 422 body
+  carries a list, which stringified as "[object Object]" in the masthead.
+  422 on a malformed filter value now renders the same “value” no-results
+  line as 404.
+- `tailwind.css?v=` must be the SAME number in index.html and story.html —
+  it is one immutable file, and two query strings are two cache entries
+  (the story page used to download a second copy of the CSS).

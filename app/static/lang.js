@@ -56,7 +56,7 @@ const I18N = {
     m_semantic_fb: "关键词无命中 · 已切换语义",
     m_similar: "相似于", m_tag: "标签", m_date: "日期", m_editor: "小编",
     m_tags: "标签索引", m_editors: "小编", m_random: "随机抽样",
-    m_all_new: "全部 · newest first", m_all_old: "全部 · oldest first",
+    m_all_new: "全部 · 新→旧", m_all_old: "全部 · 旧→新",
     stats: "{t} 项 · 第 {p}/{pp} 页 · {s} / 页",
     pager_prev: "‹ 前", pager_first: "« 第 1", pager_next: "后 ›",
     pager_more: "⭳ 更多", pager_top: "↑ 顶部", pager_again: "↻ 再随机", nav_slideshow: "幻灯",
@@ -77,10 +77,16 @@ function T(key, params) {
   return s;
 }
 
+/* app.js installs a hook here: the toggle reloads the page, so the current
+   view (mode/filter/page) has to be re-stated in the URL or it silently
+   resets to browse. Left null on the story page, which keeps ?id= as is. */
+var viewQ = null;
+
 function setLang(l) {
   try { localStorage.setItem("lang", l); } catch (e) {}
   const u = new URL(location.href);
   u.searchParams.set("lang", l);
+  if (viewQ) viewQ(u);
   location.href = u.toString();
 }
 
